@@ -28,6 +28,7 @@ twice:
 
 Full rationale: [`/Users/steve/.claude/plans/hi-i-m-curious-about-cosmic-pelican.md`](file:///Users/steve/.claude/plans/hi-i-m-curious-about-cosmic-pelican.md).
 Math and transformer background: [`jev/docs/explainers.md`](jev/docs/explainers.md).
+How the pieces connect end to end, with a worked example: [`EXPERIMENTAL_SETUP.md`](EXPERIMENTAL_SETUP.md).
 
 ## Quick start
 
