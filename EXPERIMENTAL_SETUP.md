@@ -59,14 +59,21 @@ email exists, so these are choices, not measurements:
   0% of the time.
 
 **Generating one email.** Flip a coin to decide the email's true topic
-(say 50/50 billing vs. technical, for this simplified example). Say the
+(say 50/50 billing vs. technical, for this simplified example — the real
+generator draws from four topics at 25% each). Say the
 coin lands on billing. Now consult billing's row of the table above — 35%
 chance of this sentence — to decide whether it actually gets written in.
 Say it does. The only thing that leaves this process and becomes the
 visible email is the sentence itself. The coin flip that produced it —
 "billing" — is never written down anywhere in the email; it only ever
 existed inside our generator, as a number on a piece of paper we're still
-holding.
+holding. (One implementation detail: the generator discards that top-down
+draw and stores a hard label re-drawn from the exact posterior computed
+below — `generate_item` in `generator.py`. The two procedures produce
+identical joint distributions of topic and text, so nothing in this
+walkthrough changes; it just means the stored label is always
+consistent with the answer key, even for items whose clues were forced
+rather than sampled.)
 
 **Recovering the answer.** Here's the move this entire project rests on:
 generating used the table in the forward direction (topic → chance of
@@ -158,24 +165,46 @@ influencing any other. That's a deliberate construction choice, not
 something being tested — and it's exactly what makes plain multiplication
 the correct way to combine them, rather than something more complicated.
 
-Now the two pieces of vocabulary this project actually uses, attached to
-concepts you've already seen above, not introduced cold:
+Now the vocabulary this project actually uses — the same names as the
+identifiers in `slots.py` and `generator.py`, so you can grep for any of
+them. Each one names a step in the chain that builds an email, in the
+order the generator runs it:
 
-- A **slot** is one clue *category* — e.g. "what the complaint sentence
-  says," "what domain the email is from." It's just a name for one of the
-  percentage tables from Steps 1–2, generalized from two labels to four.
-- A **realization** is the *specific value* a slot took on for one
-  particular email. In Steps 1 and 2, the slot was "which sentence is
-  used" (in the code, `complaint_phrase`), and `invoice_issue` /
-  `strong_lean` were two of its possible realizations — the specific rows
-  of the table those examples used.
+1. A **concept** is one question the email answers — one hidden variable.
+   There are four: `category`, `urgency`, `is_business`,
+   `hidden_priority`. Every email answers all four at once, each drawn
+   independently of the others. The "topic" in Steps 1–2 is the
+   `category` concept.
+2. A **label** is one possible answer to a concept — `billing`,
+   `technical`, `sales`, `spam` for `category`. Each concept draws exactly
+   **one** label per email, from its own prior (its starting odds).
+3. A **slot** is one clue that belongs to a concept — e.g.
+   `complaint_phrase` ("what the complaint sentence says") or
+   `sender_domain` ("what domain the email is from"). `category` has three
+   slots, `urgency` two, `is_business` one, `hidden_priority` none. Each
+   slot is one of the percentage tables from Steps 1–2: one row per label,
+   giving the chance of each possible value under that label.
+4. A **realization** is the value a slot actually took on for one email,
+   drawn from the row of that slot's table for the concept's label. In
+   Steps 1 and 2, `invoice_issue` and `strong_lean` were two of
+   `complaint_phrase`'s twelve realizations. Every slot draws a realization
+   on every email — some realizations, like `complaint_phrase`'s `none`,
+   just render as nothing.
+5. A **phrase** is the actual text that appears in the email. Each
+   realization has a small bank of interchangeable wordings
+   (`strong_lean` has three), and the renderer picks one uniformly at
+   random, *without seeing the label*. This step adds variety to the text
+   but no information: two emails with the same realizations get the same
+   answer key no matter which wordings came up.
 
-So "the complaint-sentence slot" is the category of clue; a specific phrase
-is one realization of it. Every slot has its own table, one row per topic,
-giving the chance of each of that slot's possible realizations under that
-topic — literally the same two-column table as Step 2, just with more
-labels and more rows. `jev/dgp/slots.py` is nothing but a collection of
-these tables, written out by hand.
+So for the worked example below: concept `category` → label (hidden) →
+slot `complaint_phrase` → realization `strong_lean` → phrase *"I think I'm
+being charged incorrectly, though it might be tied to a feature not
+working as expected."* The label is drawn once per concept, **not** once
+per slot: all three of `category`'s slots are drawn based on the same
+single label. `jev/dgp/slots.py` is nothing but the slot tables and phrase
+banks, written out by hand; the concepts and their priors are in
+`generator.py`.
 
 Putting several slots together, the full rule is the Step-2 recipe done
 once per slot, then all multiplied in: start from the topic's overall
@@ -200,7 +229,8 @@ paragraphs up.
 
 ### A real, concrete example, fully worked
 
-This is an actual item the generator produced (`seed=42`):
+This is an actual item the generator produced (the 9th item from
+`EmailGenerator(seed=42)`):
 
 ```
 From: emma.berg@yahoo.com
@@ -214,9 +244,29 @@ Thanks,
 Emma
 ```
 
-Three slots fired to build this email. Their realizations, and each
-label's chance of producing that exact realization (read straight out of
-the tables in `slots.py`):
+Six slots, across three concepts, drew realizations to build this email.
+Each piece of text traces back to exactly one of them:
+
+| Concept | Slot | Realization | Phrase in the email |
+|---|---|---|---|
+| `category` | `tone` | `polite` | "Thanks so much for your help." |
+| `category` | `complaint_phrase` | `strong_lean` | "I think I'm being charged incorrectly, … as expected" |
+| `category` | `sender_domain` | `generic_webmail` | "@yahoo.com" |
+| `urgency` | `exclaim_count` | `1` | the "!" ending the complaint sentence |
+| `urgency` | `intensity_marker` | `extreme` | "URGENT -- please treat as a priority." |
+| `is_business` | `signature_style` | `first_name_only` | "Thanks, Emma" (on two lines) |
+
+(`hidden_priority` has no slots, so it contributes no text. The name,
+"Emma Berg," and the subject line are random decoration drawn from a
+separate random stream that never sees any label.)
+
+To answer the `category` question, only `category`'s own three slots
+matter. The urgency and business slots were drawn based on those concepts'
+own labels, which are independent of the category label, so they carry no
+information about the category. (The other
+concepts' posteriors are computed the same way from their own slots.) The
+three relevant realizations, and each label's chance of producing that exact
+realization (read straight out of the tables in `slots.py`):
 
 ```
 complaint_phrase = "strong_lean"       billing 0.15   technical 0.04   sales 0.01   spam 0.01
@@ -258,17 +308,22 @@ checkable consequence of which realizations happened to come up, which is
 a direct consequence of the tables in `slots.py` — arithmetic, start to
 finish.
 
-### Three families are just three settings of the same knob
+### Three families: different combinations picked from the same fixed tables
 
-The only thing that changes between an "easy" item and a "hard" one is how
-much the realizations *overlap* across labels — how similar the rows in
-the table are for different topics:
+The tables never change between an "easy" item and a "hard" one. What
+changes is *which combination of realizations* the item gets. Because
+each concept has only a few slots, each with a handful of realizations,
+every possible combination can be listed and its exact posterior
+computed (144 combinations for `category`). `jev/dgp/scenarios.py` builds
+each family by picking combinations from that list and forcing the
+generator to use them (the `overrides` argument to `generate_item`),
+instead of letting it sample freely:
 
-| Family | What the table looks like | Resulting posterior |
+| Family | Which combinations are used | Resulting posterior |
 |---|---|---|
-| Resolvable | one realization has zero chance under every other label | one-hot (≈1.0) |
-| Ambiguous | chances overlap partially across labels | any value in between — tunable |
-| Unanswerable | the label has **no slots at all** (`hidden_priority`) | exactly the prior, for every input |
+| Resolvable | those whose top label has posterior ≥ 0.97 — typically because a realization has zero chance under every other label (like `invoice_issue` in Step 1) | near one-hot |
+| Ambiguous | the combination whose posterior is closest to a chosen target (like `strong_lean` in Step 2) | an intermediate value from the achievable grid (not arbitrary, since only 144 combinations exist) |
+| Unanswerable | none needed — the `hidden_priority` concept has **no slots at all** | exactly the prior, for every input |
 
 `hidden_priority` is the sharpest of the three: it's decided by its own
 coin flip that never influences, and is never influenced by, any slot — so
@@ -384,7 +439,8 @@ soft_xent(predicted_distribution, true_posterior_vector) =
 ```
 
 This is ordinary cross-entropy — except the target is a **distribution**
-(`[0.65, 0.17, 0.11, 0.07]`), not a single class index. The model is
+(`[0.65, 0.17, 0.07, 0.11]` for billing/technical/sales/spam, the worked
+example above), not a single class index. The model is
 literally being shown the exact table-derived answer, every step, and
 graded on how close its own distribution comes to matching it — a proper
 scoring rule (`docs/explainers.md`) applied to a target that happens to be
