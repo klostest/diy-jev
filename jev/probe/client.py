@@ -69,21 +69,38 @@ class BaseJevClient:
 
 
 class LiveJevClient(BaseJevClient):
-    """Default base_url/path follow the documented shape (docs.typesafe.ai);
-    override via JEV_BASE_URL if going through a gateway (Vercel AI Gateway,
-    Cloudflare Workers AI) that uses a different path."""
+    """Default base_url/path follow TypeSafe's own documented shape
+    (docs.typesafe.ai). Override via env vars to go through a gateway instead
+    -- confirmed working as of 2026-09-25, while TypeSafe's own signup is
+    paused on demand: OpenRouter, via
 
-    def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None, timeout: float = 30.0):
+        JEV_API_KEY=<your OpenRouter key>
+        JEV_BASE_URL=https://openrouter.ai/api/v1
+        JEV_DECIDE_PATH=/systemone
+        JEV_MODEL=jev-1.13          # or jev-latest to track whatever ships next
+
+    JEV_DECIDE_PATH and JEV_MODEL default to TypeSafe's native shape (path
+    `/decide`, no `model` field in the payload) and only need overriding for
+    a multi-provider gateway like OpenRouter, which needs to know what to
+    route to.
+    """
+
+    def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None,
+                 decide_path: Optional[str] = None, model: Optional[str] = None, timeout: float = 30.0):
         self.api_key = api_key or os.environ.get("JEV_API_KEY")
         self.base_url = base_url or os.environ.get("JEV_BASE_URL", "https://api.typesafe.ai/v1")
+        self.decide_path = decide_path or os.environ.get("JEV_DECIDE_PATH", "/decide")
+        self.model = model or os.environ.get("JEV_MODEL")  # None -> omit the field entirely
         self.timeout = timeout
         if not self.api_key:
             raise JevAPIError("no JEV_API_KEY set -- pass api_key= or export JEV_API_KEY")
 
     def ask(self, state: str, questions: Dict[str, Question]) -> JevResponse:
         payload = {"state": state, "questions": {k: q.to_json() for k, q in questions.items()}}
+        if self.model:
+            payload["model"] = self.model
         resp = requests.post(
-            f"{self.base_url}/decide", json=payload,
+            f"{self.base_url}{self.decide_path}", json=payload,
             headers={"Authorization": f"Bearer {self.api_key}"}, timeout=self.timeout,
         )
         resp.raise_for_status()

@@ -108,32 +108,56 @@ CATEGORY_LABELS = ["billing", "technical", "sales", "spam"]
 COMPLAINT_PHRASE = SlotSpec(
     name="complaint_phrase",
     emissions={
+        # "mixed_lean" and "strong_lean" exist to fill the billing-vs-rest
+        # achievable-posterior gap: every OTHER realization is either
+        # category-exclusive (posterior -> 1.0) or near-identical across
+        # labels (posterior stuck ~0.3-0.4), so nothing in between was
+        # reachable -- see enumerate_binary_combos(CATEGORY, ["billing"]).
+        # These two give billing a real but not overwhelming edge over its
+        # closest competitor (technical), so combined with sender_domain the
+        # achievable P(billing) grid now spans roughly 0.47-0.76 as well.
+        # Mass is taken out of "none" (identical across labels -> zero
+        # evidence) so every other realization's probability is untouched.
         "billing": {
             "invoice_issue": 0.35, "payment_declined": 0.30, "generic_greeting": 0.05,
             "app_crash": 0.0, "error_code": 0.0, "feature_request": 0.0,
             "pricing_question": 0.0, "discount_ask": 0.0, "unsubscribe_now": 0.0,
-            "none": 0.30,
+            "mixed_lean": 0.08, "strong_lean": 0.15,
+            "none": 0.07,
         },
         "technical": {
             "invoice_issue": 0.0, "payment_declined": 0.0, "generic_greeting": 0.05,
             "app_crash": 0.35, "error_code": 0.30, "feature_request": 0.0,
             "pricing_question": 0.0, "discount_ask": 0.0, "unsubscribe_now": 0.0,
-            "none": 0.30,
+            "mixed_lean": 0.05, "strong_lean": 0.04,
+            "none": 0.21,
         },
         "sales": {
             "invoice_issue": 0.0, "payment_declined": 0.0, "generic_greeting": 0.05,
             "app_crash": 0.0, "error_code": 0.0, "feature_request": 0.20,
             "pricing_question": 0.25, "discount_ask": 0.20, "unsubscribe_now": 0.0,
-            "none": 0.30,
+            "mixed_lean": 0.01, "strong_lean": 0.01,
+            "none": 0.28,
         },
         "spam": {
             "invoice_issue": 0.0, "payment_declined": 0.0, "generic_greeting": 0.15,
             "app_crash": 0.0, "error_code": 0.0, "feature_request": 0.0,
             "pricing_question": 0.0, "discount_ask": 0.25, "unsubscribe_now": 0.30,
-            "none": 0.30,
+            "mixed_lean": 0.01, "strong_lean": 0.01,
+            "none": 0.28,
         },
     },
     phrases={
+        "mixed_lean": [
+            "Something's wrong with my account -- might be a charge, might be a feature that broke.",
+            "I'm having trouble with my account, not totally sure if it's a billing thing or a bug.",
+            "There's an issue with my account I can't quite pin down -- possibly a payment problem, possibly something not working right.",
+        ],
+        "strong_lean": [
+            "I think I'm being charged incorrectly, though it might be tied to a feature not working as expected.",
+            "This looks like a billing problem to me, but it could also be a glitch on your end.",
+            "My subscription charge seems off, and now a related feature isn't working either.",
+        ],
         "invoice_issue": [
             "My invoice amount looks wrong.",
             "There's an error on my latest invoice.",

@@ -14,6 +14,17 @@ repo, with a pointer to the code that computes it.
 > exception — `$...$` below are real LaTeX math delimiters. A literal
 > currency amount (e.g. \$0.06) still gets escaped.
 
+> **Notation used throughout:** every symbol is defined at its first use
+> within an entry, but the recurring ones are: $x$ an input/observation;
+> $y$ a true label or outcome ($\hat y$ a predicted one, capital $Y$ when
+> it's a random variable rather than an already-observed value); $p$ a
+> probability or probability vector (subscripted, e.g. $p_{\text{true}}$ /
+> $p_{\text{model}}$, whenever two are being compared); $N$ the total
+> number of items in a sample; $K$ the number of classes or ordered
+> levels. A couple of symbols are reused for a different, locally-defined
+> purpose in one entry (e.g. $q$ in "proper scoring rules" vs. "KL
+> divergence") — each is redefined right there, not assumed carried over.
+
 ---
 
 ## Part 1 — Scoring rules and calibration
@@ -21,13 +32,19 @@ repo, with a pointer to the code that computes it.
 ### Proper scoring rules
 
 A scoring rule grades a probabilistic forecast against the outcome that
-actually happened. It's *proper* if the forecaster's own best strategy,
-in expectation, is to report their true belief — no other number scores
-better on average. Formally, a rule $S(p, y)$ is proper if for every true
-distribution $q$,
+actually happened. Write the forecast as $p$ (a probability, or a vector
+of probabilities over the possible outcomes) and the realized outcome as
+$y$, so $S(p, y)$ is the score that forecast gets once $y$ is known. The
+rule is *proper* if the forecaster's own best strategy, in expectation, is
+to report their true belief — no other choice of $p$ scores better on
+average. Formally: if outcomes are truly drawn from some distribution $q$
+(written $y\sim q$), reporting $p=q$ is the score-maximizing choice —
 $$
 q = \arg\max_p \; \mathbb{E}_{y\sim q}[S(p, y)]
 $$
+i.e. the value of $p$ that maximizes the forecaster's expected score is
+$q$ itself, the true distribution.
+
 This is the foundation the whole project rests on: it's *why* training a
 model to minimize cross-entropy or Brier score against a known-correct soft
 target is the right thing to do, rather than a heuristic. Log score and
@@ -36,16 +53,94 @@ Brier score (below) are both proper; accuracy is not a scoring rule at all
 posteriors — they're targets a proper scoring rule can actually be graded
 against, not just estimated.
 
+### Improper scoring rules: an example, and why they still get used
+
+Properness isn't automatic — plenty of superficially reasonable rules fail
+it. The textbook example is the **linear score**: just report the
+probability you assigned to whatever happened,
+$$
+S(p, y) = \begin{cases} p & y=1 \\ 1-p & y=0 \end{cases}
+$$
+using the same $p$ (forecast probability that $y=1$) and $y\in\{0,1\}$
+from the entry above. If your honest belief is $q = P(y{=}1)$, your
+expected score under this rule is
+$$
+\mathbb{E}_{y\sim q}[S(p,y)] = q\cdot p + (1-q)\cdot(1-p) = (1-q) + p(2q-1)
+$$
+— linear in $p$, hence maximized at an *endpoint* ($p=0$ or $p=1$)
+whenever $q\ne 0.5$, never at the honest $p=q$. A forecaster who is 60%
+sure gets a strictly better expected score reporting $p=1$ than reporting
+the truthful $p=0.6$: the rule rewards exaggerating toward certainty. Log
+score and Brier score don't have this problem (their expected-score-under-
+$q$ curve, as a function of $p$, peaks exactly at $p=q$) — that peaking-at-
+the-truth property *is* what "proper" buys you, made concrete.
+
+**Plain accuracy is the more common offender in practice.** It isn't a
+scoring rule over probabilities at all — it only checks which side of a
+threshold (usually 0.5) $p$ landed on, so reporting $p=0.51$ or $p=0.99$
+for the same honest 55%-sure belief earns identical credit whenever you
+turn out to be right. There is no pressure toward the honest number
+anywhere in it. This is precisely the gap in TypeSafe's own published Jev
+evals: they report accuracy-vs-cost curves and nothing scored on the
+stated probability, so that evaluation would not have caught a model that
+is right about as often but systematically overstates its confidence —
+exactly the failure the independent OOD-calibration test found. It's also
+why nothing in this project ever trains against accuracy: `toy/train.py`'s
+`soft_xent`/`soft_bce` are log-score-shaped for exactly this reason, and
+`eval/metrics.py` reports accuracy only as a secondary diagnostic, never
+as the thing being optimized.
+
+Given all that, why do improper rules stay in use?
+
+- **Legibility.** "73% accuracy" means something to any audience; "Brier
+  score 0.19" requires calibration literacy to read at all. Many
+  organizations pick the metric their stakeholders can parse, not the
+  incentive-compatible one.
+- **Only the decision gets consumed downstream.** If you're always going
+  to act on the argmax regardless of stated confidence, grading the
+  argmax is defensible — the mismatch only bites once the probability
+  itself is also relied on (routing, risk budgets, abstention), which is
+  exactly what Jev is pitched for.
+- **Rewarding boldness on purpose.** Forecasting tournaments and pundit
+  media are the sharpest case: when attention or payoff goes to whoever
+  was loudly, dramatically right, participants rationally drift toward
+  reporting more extreme probabilities than they believe. Improper by
+  design, because the organizer's actual objective (engagement) was never
+  calibration.
+- **Historical inertia.** Weather forecasting graded raw hit-rates for
+  decades before Brier's 1950 paper and the proper-scoring-rule theory
+  that followed it; plenty of fields still default to the old metric out
+  of habit.
+- **Dodging the log score's own failure mode.** Log score is proper but
+  unbounded — one confident miss can swamp an entire evaluation. Some
+  practitioners knowingly trade away propriety for that robustness
+  (clipping scores, or falling back to accuracy) because one outlier
+  dominating the leaderboard is a worse problem for them than a
+  gameable incentive.
+
+None of this makes accuracy *wrong* to report — it's a legitimate
+decision-quality metric. It's wrong to treat it as evidence about
+calibration, which is the substitution TypeSafe's marketing makes.
+
 ### Log score (NLL) and Brier score
 
-Log score: $S(p, y) = \log p(y)$ (maximize) — equivalently, negative
-log-likelihood, $-\log p(y)$ (minimize). This is ordinary cross-entropy loss.
-Brier score, for outcome $o\in\{0,1\}$ and forecast $p$:
+Log score: $S(p, y) = \log p(y)$ (maximize), where $y$ is again the
+realized outcome and $p(y)$ reads as "the probability the forecast $p$
+assigns to it." Equivalently, negative log-likelihood, $-\log p(y)$
+(minimize): this is ordinary cross-entropy loss. Brier score, for a
+binary outcome $o\in\{0,1\}$ (1 if the event in question happened, 0 if
+not) and a matching scalar forecast $p$ (the forecast probability that
+$o=1$):
 $$
 \text{Brier} = (p - o)^2
 $$
-generalizing to $K$ classes as $\sum_k (p_k - \mathbb{1}[y=k])^2$. Both are
-proper. Log score punishes confident wrong answers far more harshly (it's
+generalizing to $K$ classes — $K$ the number of classes, $p_k$ the
+forecast probability of class $k$, $y$ the true class, and
+$\mathbb{1}[y=k]$ the indicator that is 1 if $y=k$ and 0 otherwise:
+$$
+\text{Brier} = \sum_{k=1}^K \bigl(p_k - \mathbb{1}[y=k]\bigr)^2
+$$
+Both are proper. Log score punishes confident wrong answers far more harshly (it's
 unbounded as $p\to 0$); Brier score is bounded in $[0,2]$ and decomposes
 cleanly into interpretable parts (next section), which is why calibration
 work usually reports Brier alongside NLL. Code: `eval/metrics.py`'s
@@ -54,12 +149,17 @@ work usually reports Brier alongside NLL. Code: `eval/metrics.py`'s
 
 ### Calibration, stated formally
 
-A forecaster is calibrated if, among all the times it says probability $p$,
-the outcome happens a $p$ fraction of the time:
+A forecaster is calibrated if, among all the times it reports probability
+$p$ for some binary event, the event happens a $p$ fraction of the time.
+Write $\hat p$ for the model's reported probability (varying from item to
+item) and $Y\in\{0,1\}$ for the event as a random variable — the same
+kind of binary outcome called $o$ above, but not yet observed:
 $$
 \mathbb{E}[\,Y \mid \hat p = p\,] = p \quad \text{for (almost) every } p
 $$
-This is a statement about *long-run frequency given the forecast*, not about
+Read the left side as: restrict to every item where the model happened to
+report exactly $\hat p = p$, and average the eventual (0/1) outcome $Y$
+over just those items. This is a statement about *long-run frequency given the forecast*, not about
 any single prediction — a calibrated model can still be wrong on any
 individual item, in fact it must be, exactly $1-p$ of the time when it says
 $p$. This is the property TypeSafe's marketing claims for Jev and the
@@ -67,13 +167,20 @@ property none of their own published evals actually measure.
 
 ### Expected Calibration Error (ECE) and its finite-sample bias
 
-ECE approximates the calibration gap by bucketing predictions into $M$ bins
-and averaging the gap between confidence and accuracy, weighted by bin size:
+Take $N$ items total, each with a model confidence (its top predicted
+probability) and a correctness indicator $o_i = \mathbb{1}[\hat y_i = y_i]
+\in \{0,1\}$ — 1 if the model's predicted label $\hat y_i$ matched the
+true label $y_i$ for item $i$, else 0; this is the same binary-outcome
+idea as Brier score's $o$ above, specialized here to "was the top
+prediction right." ECE approximates the calibration gap by sorting the
+$N$ items into $M$ confidence bins and averaging, over bins, the gap
+between mean confidence and mean correctness, weighted by each bin's
+size $n_m$ (the count of items in bin $m$, so $\sum_{m=1}^M n_m = N$):
 $$
 \text{ECE} = \sum_{m=1}^{M} \frac{n_m}{N}\, \bigl|\, \bar p_m - \bar o_m \,\bigr|
 $$
-where $\bar p_m$ is the mean confidence and $\bar o_m$ the mean outcome
-(accuracy) in bin $m$. The catch: even a perfectly calibrated model has
+where $\bar p_m$ is the mean confidence and $\bar o_m$ the mean of $o_i$
+— i.e. the accuracy — among the items in bin $m$. The catch: even a perfectly calibrated model has
 finite-sample noise in $\bar o_m$ (it's an average of Bernoulli draws), and
 because ECE takes an absolute value, that noise is a one-directional
 (upward) bias — ECE is never negative, so sampling noise can only inflate
@@ -92,7 +199,10 @@ Brier score splits exactly into three interpretable terms (Murphy, 1973):
 $$
 \text{Brier} = \underbrace{\text{reliability}}_{\text{calibration gap}} \; - \; \underbrace{\text{resolution}}_{\text{discrimination}} \; + \; \underbrace{\text{uncertainty}}_{\text{irreducible floor}}
 $$
-with, for bins $m$ of size $n_m$, overall base rate $\bar o$:
+with $n_m$, $\bar p_m$, $\bar o_m$, and $N$ exactly as in the ECE entry
+above, plus one new quantity, the overall base rate
+$\bar o = \frac{1}{N}\sum_{i=1}^N o_i$ (mean correctness across *all* $N$
+items, i.e. overall accuracy, not just within one bin):
 $$
 \text{reliability} = \frac{1}{N}\sum_m n_m(\bar p_m - \bar o_m)^2, \quad
 \text{resolution} = \frac{1}{N}\sum_m n_m(\bar o_m - \bar o)^2, \quad
@@ -119,14 +229,16 @@ to zero as bins get finer. Verified by `test_brier_binned_identity_holds_exactly
 
 ### Reliability diagrams and temperature scaling
 
-A reliability diagram plots $\bar o_m$ against $\bar p_m$ per bin — the
-scatter of bars around the diagonal *is* reliability, visually. Temperature
-scaling is the standard one-parameter fix for a systematic miscalibration:
-rescale the logits before the softmax,
+A reliability diagram plots $\bar o_m$ against $\bar p_m$ per bin (both as
+defined above) — the scatter of bars around the diagonal *is* reliability,
+visually. Temperature scaling is the standard one-parameter fix for a
+systematic miscalibration: rescale the *logits* — a model's raw,
+pre-softmax scores, one per class, written $z$ — before the softmax, to
+get a new probability vector $\hat p$:
 $$
 \hat p = \mathrm{softmax}(z / T)
 $$
-$T>1$ flattens the distribution toward uniform (fixes overconfidence);
+$T$ is the temperature, the one parameter being fit. $T>1$ flattens the distribution toward uniform (fixes overconfidence);
 $T<1$ sharpens it (fixes underconfidence); $T=1$ is a no-op. Fitting $T$ by
 minimizing NLL on held-out data is a cheap, robust post-hoc calibration
 check. It only needs logits, and Jev returns probabilities, not logits — but
@@ -154,13 +266,19 @@ calibration at all.
 ### Selective prediction: risk–coverage and AURC
 
 If you can abstain below a confidence threshold, the question becomes: at
-what error rate can you auto-handle what fraction of cases? Sort items by
-confidence descending; at coverage $c$ (the top $c$ fraction), *selective
-risk* is the error rate among just those items:
+what error rate can you auto-handle what fraction of cases? Sort all $N$
+items by confidence, descending, and re-index them in that sorted order;
+write $y_{(i)}$ and $\hat y_{(i)}$ for the true and predicted label of
+whichever item ends up $i$-th in this sorted order (the parenthesized
+subscript is standard notation for "after sorting," distinguishing sorted
+position from the item's original index). At *coverage* $c\in[0,1]$ —
+handle just the most-confident $c$ fraction of items, i.e. the first
+$\lfloor cN\rfloor$ in sorted order — *selective risk* is the error rate
+among just those items:
 $$
 \text{risk}(c) = \frac{1}{\lfloor cN \rfloor}\sum_{i=1}^{\lfloor cN \rfloor} \mathbb{1}[\hat y_{(i)} \ne y_{(i)}]
 $$
-with items ordered by decreasing confidence. AURC integrates this curve —
+AURC integrates this curve —
 lower is better, and it rewards good *ranking* (resolution) regardless of
 whether the absolute confidence values are calibrated. This is the metric
 that actually answers "can I auto-route the confident slice and escalate the
@@ -174,7 +292,9 @@ gated pitch and the email-routing benchmark's headline finding. Code:
 
 ### Bayes' rule in log-odds form, and its link to logistic regression
 
-For two labels with likelihoods $P(x\mid y)$:
+For an input $x$ (the observed evidence — here, an item's rendered text)
+and two candidate labels, call them $A$ and $B$, with class-conditional
+likelihoods $P(x\mid y{=}A)$ and $P(x\mid y{=}B)$:
 $$
 \underbrace{\log\frac{P(y{=}A\mid x)}{P(y{=}B\mid x)}}_{\text{posterior log-odds}}
 = \underbrace{\log\frac{P(y{=}A)}{P(y{=}B)}}_{\text{prior log-odds}} +
@@ -190,14 +310,15 @@ $K$ labels and multiple slots.
 
 ### Naive Bayes conditional independence, and why the posterior stays closed-form
 
-"Naive Bayes" means: given the label, the evidence channels (slots) are
-drawn independently. That's an assumption baked into most real classifiers
-by choice; here it's a fact about the generator, true by construction, not
-approximated:
+"Naive Bayes" means: given the label $y$, the evidence channels (slots)
+are drawn independently. Writing $r_1,\dots,r_k$ for the realizations of
+an item's $k$ slots (see `dgp/slots.py`), that's exactly:
 $$
 P(r_1,\dots,r_k \mid y) = \prod_{i=1}^k P(r_i \mid y)
 $$
-so the posterior is exactly
+an assumption baked into most real classifiers by choice; here it's a
+fact about the generator, true by construction, not approximated. By
+Bayes' rule (previous entry), the posterior is then exactly
 $$
 P(y \mid r_1,\dots,r_k) \; \propto \; \text{prior}(y) \prod_i P(r_i\mid y)
 $$
@@ -208,9 +329,11 @@ targets come from" section for the worked numeric example.
 
 ### Bayes error rate
 
-The irreducible error rate of the *optimal* classifier for a given problem —
-even a perfect model can't beat it, because the label genuinely isn't
-determined by the input beyond this point:
+The irreducible error rate of the *optimal* classifier for a given problem
+— even a perfect model can't beat it, because the label genuinely isn't
+determined by the input beyond this point. Averaging over the distribution
+of inputs $x$, and at each $x$ picking the best possible label (the one
+maximizing $P(y\mid x)$ over candidate labels $y$):
 $$
 \text{Bayes error} = \mathbb{E}_x\Bigl[\,1 - \max_y P(y\mid x)\,\Bigr]
 $$
@@ -223,12 +346,16 @@ is leaking (see the negative controls in `dgp/scenarios.py`).
 
 ### KL divergence and posterior divergence
 
-Kullback-Leibler divergence measures how much information is lost using
-distribution $q$ to approximate the true $p$:
+Kullback-Leibler divergence measures how much information is lost using a
+distribution $q$ to approximate a true distribution $p$, both defined over
+the same set of possible labels (summed over by $y$, ranging over every
+possible label):
 $$
 D_{\mathrm{KL}}(p \,\|\, q) = \sum_y p(y) \log\frac{p(y)}{q(y)} \;\ge 0, \quad = 0 \iff p=q
 $$
 It's not symmetric, and that asymmetry is meaningful here: $D_{\mathrm{KL}}(p_{\text{true}}\,\|\,p_{\text{model}})$
+— i.e. $p$ set to the generator's true posterior and $q$ set to the model's
+predicted distribution —
 penalizes the model heavily for assigning near-zero probability to
 something the truth says is possible (confidently missing a real outcome)
 more than the reverse. This is the metric no published Jev test can compute,
@@ -299,8 +426,13 @@ pass instead.
 medium < high < critical) — a plain softmax head ignores that order
 entirely and would happily be equally "confident" mistaking low for
 critical as low for medium. The cumulative-link / proportional-odds model
-(McCullagh, 1980) instead posits a single latent utility $\eta$ per item and
-a set of increasing cutpoints $c_1 < c_2 < \dots < c_{K-1}$:
+(McCullagh, 1980) instead posits a single latent utility $\eta$ per item —
+a real-valued score for "how far up the ordinal scale this item sits" —
+and a set of increasing cutpoints $c_1 < c_2 < \dots < c_{K-1}$ separating
+the $K$ ordered levels. Writing $Y$ for the ordinal outcome as a random
+variable (taking one of the $K$ levels, indexed $0,\dots,K-1$, with $k$
+one such level index) and $\sigma(t) = 1/(1+e^{-t})$ for the logistic
+sigmoid:
 $$
 P(Y \le k \mid \eta) = \sigma(c_k - \eta)
 $$
@@ -368,8 +500,9 @@ ModernBERT below) is added or otherwise mixed in so the model can tell
 
 For a sequence of token vectors, attention lets every position gather
 information from every other position, weighted by relevance. Each token
-produces a query $Q$, key $K$, and value $V$ (three learned linear
-projections of the same input); attention output is
+produces a query $Q$, key $K$, and value $V$ — three learned linear
+projections of the same input, each row-vector of dimension $d_k$ — and
+attention output is
 $$
 \mathrm{Attention}(Q,K,V) = \mathrm{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right) V
 $$
@@ -392,21 +525,28 @@ rather than another full pass through the network.
 ### Residual stream, layer norm, and the MLP block
 
 Each transformer layer doesn't replace its input, it *adds* a computed
-update to it: $x \leftarrow x + f(x)$. That additive "residual stream" is
-why very deep networks are trainable at all — gradients have a direct path
-backward through the `+` regardless of how complicated $f$ gets. Layer
-normalization rescales activations to stable mean/variance before (or
-after, depending on architecture) each sub-block, which is what keeps
-training stable at depth. Every attention block is paired with a small
-per-token MLP (usually expand-then-contract, e.g. $d\to 4d\to d$) that lets
-the model do per-position nonlinear feature mixing that attention itself
-(a weighted average) cannot.
+update to it: writing $x$ for a token's running representation (its
+vector at this point in the network, the "residual stream") and $f$ for
+the layer's computed function of it,
+$$
+x \leftarrow x + f(x)
+$$
+That additive structure is why very deep networks are trainable at all —
+gradients have a direct path backward through the `+` regardless of how
+complicated $f$ gets. Layer normalization rescales activations to stable
+mean/variance before (or after, depending on architecture) each sub-block,
+which is what keeps training stable at depth. Every attention block is
+paired with a small per-token MLP, usually expand-then-contract from the
+model's hidden dimension $d$ (e.g. $d\to 4d\to d$), that lets the model do
+per-position nonlinear feature mixing that attention itself (a weighted
+average) cannot.
 
 ### Encoder vs. decoder; bidirectional vs. causal masking
 
 The *only* structural difference between a BERT-style encoder and a
-GPT-style decoder is the attention mask. A decoder uses **causal masking** —
-position $i$ can only attend to positions $\le i$ — because it has to work
+GPT-style decoder is the attention mask. A decoder uses **causal masking**
+— writing $i$ for a token's position in the sequence, position $i$ can
+only attend to positions $\le i$ — because it has to work
 at generation time, one token at a time, with no future tokens to look at
 yet. An encoder has no such constraint: every position attends to every
 other position, forward and backward, because the whole input is available

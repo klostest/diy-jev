@@ -5,6 +5,7 @@ and the "raise clearly rather than fabricate" behavior for an unseen request.
 from __future__ import annotations
 
 import json
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -14,6 +15,7 @@ from jev.probe.client import (
     FixtureJevClient,
     JevAPIError,
     JevResponse,
+    LiveJevClient,
     Question,
     ReplayJevClient,
     _request_key,
@@ -140,3 +142,82 @@ def test_caching_client_appends_multiple_calls(tmp_path):
     replay = ReplayJevClient([cache_path])
     assert replay.ask("ticket A", q).answers["expedite"]["noul"] == 0.77
     assert replay.ask("ticket B", q).answers["expedite"]["noul"] == 0.77
+
+
+# ---------------------------------------------------------------------------
+# LiveJevClient: TypeSafe's native shape by default, OpenRouter via env vars.
+# Mocked requests.post throughout -- no real network call, no real spend.
+# ---------------------------------------------------------------------------
+
+
+def _mock_response(json_data):
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json = MagicMock(return_value=json_data)
+    return resp
+
+
+def test_live_client_defaults_to_native_typesafe_shape(monkeypatch):
+    monkeypatch.setenv("JEV_API_KEY", "test-key")
+    monkeypatch.delenv("JEV_BASE_URL", raising=False)
+    monkeypatch.delenv("JEV_DECIDE_PATH", raising=False)
+    monkeypatch.delenv("JEV_MODEL", raising=False)
+
+    fake_response = _mock_response({"model": "jev-1.13.0", "answers": {"q": {"type": "noul", "noul": 0.5}}, "usage": {}})
+    with patch("jev.probe.client.requests.post", return_value=fake_response) as mock_post:
+        client = LiveJevClient()
+        q = {"q": Question(type="noul", instructions="?", criteria={"true": "T", "false": "F"})}
+        client.ask("some state", q)
+
+    called_url = mock_post.call_args.args[0]
+    called_payload = mock_post.call_args.kwargs["json"]
+    assert called_url == "https://api.typesafe.ai/v1/decide"
+    assert "model" not in called_payload  # today's behavior, unchanged
+
+
+def test_live_client_supports_openrouter_via_env_vars(monkeypatch):
+    monkeypatch.setenv("JEV_API_KEY", "test-openrouter-key")
+    monkeypatch.setenv("JEV_BASE_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("JEV_DECIDE_PATH", "/systemone")
+    monkeypatch.setenv("JEV_MODEL", "jev-1.13")
+
+    fake_response = _mock_response({
+        "model": "typesafe/jev-1.13-20260917",
+        "answers": {"q": {"type": "noul", "noul": 0.5}},
+        "usage": {"cost": 0.00003},
+    })
+    with patch("jev.probe.client.requests.post", return_value=fake_response) as mock_post:
+        client = LiveJevClient()
+        q = {"q": Question(type="noul", instructions="?", criteria={"true": "T", "false": "F"})}
+        resp = client.ask("some state", q)
+
+    called_url = mock_post.call_args.args[0]
+    called_payload = mock_post.call_args.kwargs["json"]
+    assert called_url == "https://openrouter.ai/api/v1/systemone"
+    assert called_payload["model"] == "jev-1.13"
+    assert resp.model == "typesafe/jev-1.13-20260917"
+
+
+def test_live_client_constructor_args_override_env_vars(monkeypatch):
+    monkeypatch.setenv("JEV_API_KEY", "env-key")
+    monkeypatch.setenv("JEV_BASE_URL", "https://should-be-overridden.example")
+    monkeypatch.delenv("JEV_DECIDE_PATH", raising=False)
+    monkeypatch.delenv("JEV_MODEL", raising=False)
+
+    fake_response = _mock_response({"model": "x", "answers": {}, "usage": {}})
+    with patch("jev.probe.client.requests.post", return_value=fake_response) as mock_post:
+        client = LiveJevClient(api_key="explicit-key", base_url="https://example.com", decide_path="/foo", model="bar")
+        client.ask("state", {})
+
+    called_url = mock_post.call_args.args[0]
+    called_payload = mock_post.call_args.kwargs["json"]
+    called_headers = mock_post.call_args.kwargs["headers"]
+    assert called_url == "https://example.com/foo"
+    assert called_payload["model"] == "bar"
+    assert called_headers["Authorization"] == "Bearer explicit-key"
+
+
+def test_live_client_raises_without_api_key(monkeypatch):
+    monkeypatch.delenv("JEV_API_KEY", raising=False)
+    with pytest.raises(JevAPIError):
+        LiveJevClient()
