@@ -9,7 +9,7 @@ result is measured (Part 3) — so that `RESULTS_AND_DISCUSSION.md` can be
 read without introducing anything new.
 
 > **On `$` in this file:** following `docs/explainers.md`, `$...$` in
-> Part 3 are real LaTeX math delimiters, a deliberate exception to the
+> Parts 2 and 3 are real LaTeX math delimiters, a deliberate exception to the
 > project's convention of escaping dollar signs. A literal currency amount
 > would still be escaped (\$).
 
@@ -429,6 +429,79 @@ encoder (MiniLM, one pass)  -->  token vectors
 predicted       predicted       predicted        predicted
 distribution    distribution    scalar           distributions
 ```
+
+**Step by step** (code in `jev/toy/model.py`):
+
+1. **Encoder, once.** The email is tokenized (at most 64 tokens) and passed
+   once through the encoder, a 6-layer BERT-style network with
+   384-dimensional vectors, pretrained and then fine-tuned here. As in
+   BERT, the output is one context-enriched vector per token,
+   $H = [h_1, \dots, h_N]$ with each $h_t \in \mathbb{R}^{384}$. Nothing
+   after this step looks at the text again.
+2. **One summary vector per question, by attention pooling.** To classify,
+   the model needs a single vector, not $N$ of them. Common choices are
+   BERT's `[CLS]` vector, or the average of all token vectors (how this
+   encoder was originally trained to make sentence embeddings). This model
+   instead gives each question its own **learned query vector**: four
+   trainable 384-dimensional parameters, $q_{\text{category}}$,
+   $q_{\text{urgency}}$, $q_{\text{is\_business}}$ and
+   $q_{\text{hidden\_priority}}$, which don't come from any text. For
+   question $c$, one standard attention step uses $q_c$ as the query and
+   the token vectors as keys and values:
+
+   $$
+   \alpha_t = \text{softmax}_t\!\left(\frac{(q_c W_Q)(h_t W_K)^{\top}}{\sqrt{d}}\right),
+   \qquad
+   z_c = \Big(\sum_{t} \alpha_t \, h_t W_V\Big) W_O
+   $$
+
+   The question's vector scores every token for relevance, the scores
+   become weights summing to 1, and $z_c$ is the resulting weighted blend of
+   tokens. It uses 4 attention heads of 96 dimensions each, with padding
+   tokens masked out. The projections $W_Q, W_K, W_V, W_O$ are shared by all
+   four questions; only the query vectors differ. So each question learns
+   to *look at different tokens*: after training, the urgency query should
+   weight tokens like "URGENT" and "!!!", and the category query the
+   complaint sentence. The one set of token vectors is read four ways.
+3. **Output heads.** Each $z_c$ goes through a small linear layer: a
+   softmax over labels for `category` and `urgency`, a sigmoid for the
+   yes/no `is_business`, and three views (yes/no, choice, score) for
+   `hidden_priority`. Everything, encoder included, is trained end to end
+   with the loss below.
+
+**How this relates to cross-attention in translation.** It's the same
+attention operation; only the source of the queries changes:
+
+| | Translation (encoder–decoder) | This model |
+|---|---|---|
+| Keys and values | encoder's token vectors (the source sentence) | encoder's token vectors (the email) |
+| Queries | decoder's vectors for the target words so far, one per target position | one learned vector per question, fixed after training |
+| How often | at every decoder layer, at every step of generation | once: a single attention layer |
+| Output | next-word probabilities, one step at a time | one vector per question, then its answer |
+
+It's a decoder cut down to a single step, with no self-attention and no
+generation, whose "target side" is just one learned slot per question.
+Nothing is generated, and all questions are answered in parallel from one
+encoder pass. The same pattern appears elsewhere as "attention pooling" or
+"learned queries" (for example, the Perceiver and DETR architectures).
+
+**Why build it this way.** It copies the two properties TypeSafe advertises
+for Jev's "System One" design (`docs/explainers.md`, "This project's head
+design"): asking another question costs one small attention step over
+vectors that already exist, not another encoder pass; and each question's
+summary is computed separately, so questions can't contaminate each other
+the way several questions listed in one chat prompt could.
+
+**An important difference from Jev.** Here the four questions are fixed at
+training time: each question's "meaning" is just a learned vector. Jev
+accepts *new* questions at request time, written as text (the
+`instructions` and `criteria` in "How we talk to Jev" below), so it must
+turn question text into queries somehow, presumably by encoding it too.
+TypeSafe doesn't publish how. The toy model therefore copies the *shape* of
+Jev's design, not its workings, and it can't answer a question it wasn't
+trained on. It couldn't answer S6's instruction with a stated base rate,
+for example. That's one reason the toy results show what's *possible*
+for this kind of design rather than how Jev actually works.
 
 The probability *table* (the emission tables from Part 1) never enters this
 diagram. The model never sees `slots.py`. All it ever sees is rendered

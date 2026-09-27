@@ -192,14 +192,14 @@ now much better attested.)
 
 **Resolution is shared; reliability is not.** On the `category` head
 (held-out split), soft and hard training reach essentially the same
-accuracy (0.868±0.002 vs 0.867±0.002) and near-identical AURC
-(0.0174±0.0002 vs 0.0176±0.0001 — see `risk_coverage_category.png`): the
+accuracy (0.867±0.001 vs 0.869±0.002) and near-identical AURC
+(0.0173 vs 0.0175 — see `risk_coverage_category.png`): the
 two models rank confident-vs-unsure items identically well. But mean
-posterior KL divergence from the true label distribution is **19x lower
-for soft training** (0.0002±0.0000 vs 0.0036±0.0001), and on the
+posterior KL divergence from the true label distribution is **8x lower
+for soft training** (0.0005±0.0001 vs 0.0037±0.0001), and on the
 deliberately-ambiguous item family built via `build_ambiguous` — where the
 true posterior is genuinely non-degenerate, not near one-hot — the gap
-widens to **30x** (0.0005±0.0000 vs 0.0136±0.0056) while accuracy is
+is **6x** (0.0022±0.0005 vs 0.0134±0.0051) while accuracy is
 identical (0.498±0.0000 for both, exactly, every seed). This is the Brier
 decomposition's reliability/resolution split (`docs/explainers.md`) showing
 up empirically: same architecture, same accuracy, same *ranking* of
@@ -222,14 +222,15 @@ identical accuracy on every eval set and every seed (0.404 held-out, 0.386 on
 the ambiguous set — the sets differ only in which hard labels were sampled) — both
 learned to report close to the prior on a question the text cannot answer.
 One reproducible nuance visible only with multiple seeds: soft training's
-mean KL is essentially exact (0.0000±0.0000), while hard's is small but
-consistently nonzero (0.0021–0.0025±0.0003–0.0004) — hard gets very close
+mean KL is near-exact (about 0.0002), while hard's is small but
+consistently larger (0.002–0.003) — hard gets very close
 to the prior but not quite as exactly as soft does, reliably, across every
 seed. Both still comfortably beat the real Jev's published failure on an
 analogous unanswerable question (44.7% accuracy, 0.74 mean confidence) —
 suggesting that failure is *not* an inevitable property of this
-architecture/loss family under clean training, something about Jev's
-actual training distribution or objective is producing it. Suite S3 tests
+architecture under clean training. (It doesn't show what Jev's training
+did: the toy model was trained on this world and Jev wasn't — see
+`RESULTS_AND_DISCUSSION.md`.) Suite S3 tests
 this directly against the real API (see below).
 
 **The `urgency` head: underfit, diagnosed, fixed.** An earlier version used
@@ -237,9 +238,15 @@ an ordinal (cumulative-link) head for `urgency` and stalled at accuracy 0.48
 (ceiling 0.56) and mean KL ~0.20. Diagnostic runs showed the ordinal form
 could represent the posteriors but trained far too slowly (8 epochs only
 reached 0.13); a plain softmax head fit in 3 epochs. With it, held-out
-urgency accuracy is 0.560/0.562 (soft/hard) and mean KL 0.0002/0.0043 — the
-same soft-vs-hard pattern as category. Details in `RESULTS_AND_DISCUSSION.md`;
+urgency accuracy is 0.558/0.560 (soft/hard) and mean KL 0.0025/0.0080 — the
+same soft-beats-hard pattern as category. Details in `RESULTS_AND_DISCUSSION.md`;
 the earlier outputs are archived in `outputs/toy_experiment_ordinal_urgency_20260926/`.
+
+**Dropout fix (2026-09-26).** A bug left dropout switched off for the last
+two training epochs in earlier runs. With it fixed, soft training's advantage
+shrank from 10–30x to 6–8x on `category` (hard training was barely
+affected); the numbers above are post-fix. Pre-fix outputs are archived in
+`outputs/toy_experiment_dropout_bug_20260926/`.
 
 **Shuffled-label negative control passed.** Accuracy 0.253 against a
 uniform-random baseline of 0.25 (single run — this is a sanity check, not a

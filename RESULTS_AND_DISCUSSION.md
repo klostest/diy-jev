@@ -34,7 +34,7 @@ About the toy model (Part 2 of the setup):
 
 5. **Accuracy can't see calibration.** Two models trained identically
    except for the loss reach the same accuracy, but one's probabilities
-   are 10–30× further from the truth. An accuracy-only evaluation, which
+   are 6–8× further from the truth. An accuracy-only evaluation, which
    is what TypeSafe publishes, can't show whether a model's probabilities
    are right.
 6. **A model built the way Jev is can say "I don't know" correctly.** On
@@ -368,10 +368,10 @@ shown):
 
 | Eval set | Accuracy, soft | Accuracy, hard | Posterior KL, soft (nats) | Posterior KL, hard (nats) | Hard ÷ soft |
 |---|---|---|---|---|---|
-| Held-out test split | 0.868 ± 0.002 | 0.867 ± 0.002 | 0.00019 | 0.0036 ± 0.0001 | 19× |
-| Ambiguous family | 0.498 | 0.498 | 0.00045 | 0.0136 ± 0.0056 | 30× |
-| Resolvable family | 1.000 | 1.000 | 0.00011 | 0.0012 ± 0.0002 | 10× |
-| Unanswerable family | 0.763 ± 0.003 | 0.762 ± 0.003 | 0.00027 | 0.0056 ± 0.0002 | 21× |
+| Held-out test split | 0.867 ± 0.001 | 0.869 ± 0.002 | 0.0005 ± 0.0001 | 0.0037 ± 0.0001 | 8× |
+| Ambiguous family | 0.498 | 0.498 | 0.0022 ± 0.0005 | 0.0134 ± 0.0051 | 6× |
+| Resolvable family | 1.000 | 1.000 | 0.0001 | 0.0008 ± 0.0002 | 7× |
+| Unanswerable family | 0.762 ± 0.001 | 0.761 ± 0.002 | 0.0009 ± 0.0002 | 0.0065 ± 0.0003 | 7× |
 
 **Start with the ambiguous row, where accuracy is exactly equal.** That set
 uses one forced combination of clues, so all 1,000 emails have the same
@@ -379,19 +379,24 @@ exact answer, with sales-or-spam as the most likely label. Any model that
 ranks that label first will pick the same answer for all 1,000 emails. Its
 accuracy is then just the fraction of sampled labels that happened to match
 that answer: 0.498, for both models, on every seed. Accuracy literally
-cannot tell the models apart here, but posterior KL can: 0.00045 nats for soft against 0.0136 for hard, 30× apart.
+cannot tell the models apart here, but posterior KL can: 0.0022 nats for
+soft against 0.0134 for hard, 6× apart.
 
 **The same pattern holds on every set.** Accuracy and AURC, which measures
 how well confident answers are ranked above unsure ones, are essentially
-identical between the two models. Posterior KL differs by 10–30× on `category`, and by a similar 27–49× on `urgency` and `is_business` (held-out AURC on `category`: 0.0174 soft, 0.0176 hard).
-In the setup's vocabulary (Part 3, "reliability and resolution"), the two
+identical between the two models (held-out AURC on `category`: 0.0173
+soft, 0.0175 hard). Posterior KL is 6–8× lower for soft training on
+`category`, and 3–14× lower on the other three questions (`urgency` 3–4×,
+`is_business` 5–7×, `hidden_priority` 12–14×), on every eval set and every
+seed. In the setup's vocabulary (Part 3, "reliability and resolution"), the two
 models have the same *resolution*: they rank emails equally well. Only the
 soft-trained one has good *reliability*: it reports the right numbers.
 
 **Why this matters for Jev.** TypeSafe's published evaluations report
 accuracy, cost and latency. Here are two models whose accuracy matches to
-the third decimal while one's probabilities are 10–30× further from the truth. So accuracy numbers, however good, can't establish
-that a model's probabilities mean what they say. Only a test against known
+the third decimal while one's probabilities are 6–8× further from the
+truth. So accuracy numbers, however good, can't establish that a model's
+probabilities mean what they say. Only a test against known
 probabilities, like S2, can.
 
 ### Hard labels are enough; soft labels make it cheaper
@@ -400,7 +405,7 @@ It's easy to read the table above as "soft labels are needed for
 calibration." They aren't. The hard-trained model never saw a single true
 probability, only one observed label per email, which is the situation of
 anyone training on historical outcomes. Yet its KL on held-out emails is
-0.0036 nats, excellent in absolute terms: well under the 0.028 nats of
+0.0037 nats, excellent in absolute terms: well under the 0.028 nats of
 reporting 0.60 when the truth is 0.714 (setup, Part 3). The reason is that
 cross-entropy is a *proper scoring rule* (`docs/explainers.md`, "Proper
 scoring rules"). Across many emails with the same clues, about 71% of the
@@ -410,10 +415,22 @@ with a proper loss recovers calibrated probabilities by itself.
 
 Soft labels don't make calibration *possible*; they make it more
 *data-efficient*. Each example carries the whole distribution rather than
-one noisy draw from it. Here, where the 116 `category` clue combinations in the training
-split each appear in a median of 151 training emails (at least 21), that efficiency shows up as a 10–30×
-smaller KL, from an already small base. With fewer examples per situation,
-the gap would be expected to grow.
+one noisy draw from it. Here, where the 116 `category` clue combinations
+in the training split each appear in a median of 151 training emails (at
+least 21), that efficiency shows up as a 6–8× smaller KL, from an already
+small base. With fewer examples per situation, the gap would be expected
+to grow.
+
+**How big the advantage looks depends on training details.** An earlier run
+of this experiment had a bug that switched dropout off for the last two of
+three training epochs. Soft training fit the exact targets more tightly
+under those conditions, and the soft advantage came out at 10–30× on
+`category`. With dropout working as intended, which is standard practice
+for fine-tuning, it's 6–8×. The hard-trained model was barely affected
+(0.0036 vs. 0.0037 nats held-out). The direction is robust: soft beats hard
+on every question, eval set and seed in both runs. But treat any specific
+multiple as specific to this setup. The earlier results are archived in
+`outputs/toy_experiment_dropout_bug_20260926/`.
 
 ### The unanswerable question: the toy model gets it right
 
@@ -423,7 +440,7 @@ models do essentially that. Their accuracy is identical on every eval set:
 0.404 on held-out, 0.400 on the unanswerable family and 0.386 on the
 ambiguous family. The differences between sets come only from which hard
 labels happened to be sampled into each. Soft training's KL from the base
-rates is 0.00002 nats. Hard training's is about 0.0025, small but
+rates is about 0.0002 nats. Hard training's is about 0.002–0.003, small but
 consistently larger on every seed.
 
 This is the contrast with S3. A model built the way Jev is, trained on data
@@ -453,9 +470,9 @@ training, same data) located the problem:
 Fitting the ordinal form directly to the 16 exact urgency posteriors
 reaches 0.011 nats, so it *could* represent the answers. It just trains
 far too slowly in this setup. The head is now a plain softmax. With it,
-the full three-seed experiment gives held-out urgency accuracy **0.560
-(soft) / 0.562 (hard)**, right at the ceiling, and KL **0.00016 / 0.0043**,
-the same soft/hard pattern as `category` (27×). The earlier results are
+the full three-seed experiment gives held-out urgency accuracy **0.558
+(soft) / 0.560 (hard)**, at the ceiling, and KL **0.0025 / 0.0080**, the
+same soft-beats-hard pattern as `category` (3×). The earlier results are
 archived in `outputs/toy_experiment_ordinal_urgency_20260926/`. The
 `urgency` question isn't used in any Jev test, so none of the Jev results
 are affected.
@@ -474,8 +491,8 @@ are affected.
   set, within normal sampling noise (setup, Part 3, "Accuracy, and its
   ceiling"); the ceiling limits the long-run average, not one test set.
 - **ECE agrees in direction.** The more common calibration metric also
-  favors soft (held-out `category`: 0.0046 soft vs 0.0103 hard), but it depends on bin
-  choices, so KL is the one to rely on.
+  favors soft (held-out `category`: 0.0058 soft vs. 0.0130 hard), but it
+  depends on bin choices, so KL is the one to rely on.
 
 ---
 
