@@ -383,7 +383,7 @@ claims):
 
 ---
 
-## Part 2 — How the probability table and the model come together
+## Part 2 — How the models are trained and tested against the table
 
 One clarification first: the model trained in `toy/` is **not an LLM**. It
 doesn't generate text and has no notion of a next token. It's a small
@@ -477,9 +477,233 @@ compare — via ECE, the Brier decomposition, or posterior KL
 evaluation-time use are the same data, doing two different jobs: one is a
 loss to descend, the other is an answer key to grade against.
 
+### The toy experiment's protocol
+
+`scripts/run_toy_experiment.py`:
+
+- **Data.** One pool of 30,000 generated items (`data_seed=100`),
+  generated once and reused by every training run. Split 23,560 train /
+  6,440 test. The split is *compositional* on `category`
+  (`scenarios.compositional_split`): each combination of `category`
+  realizations goes entirely to one side, so every combination in the test
+  set is one the model never trained on. It has to generalize to new
+  combinations rather than memorize the ones it saw.
+- **Training.** Each mode (soft, hard) is trained with 3 seeds
+  (100/101/102) for 3 epochs, batch size 32. Learning rates are 2e-5 for
+  the encoder and 2e-4 for the heads. Nothing differs between the modes
+  except the loss function.
+- **Evaluation sets.** Every trained model is scored on four sets: the
+  held-out test split, plus 1,000 items each from the three families in
+  Part 1. Those are *resolvable* (top posterior ≥ 0.97), *unanswerable*
+  (ordinary items, where `hidden_priority` is automatically unanswerable)
+  and *ambiguous* (a single forced combination with P(sales or spam)
+  ≈ 0.6).
+- **Metrics**, per concept head: accuracy against the sampled hard label,
+  ECE, AURC, and mean posterior KL from the exact posterior.
+- **Negative control.** One extra hard-mode run, 2 epochs, with the
+  `category` labels randomly shuffled. It must score at chance.
+
+### The live probe: six suites against the real Jev
+
+`jev/probe/suites.py` sends generated emails to the real Jev API (via
+`probe/client.py`) and grades the answers against the exact posterior.
+Jev gets exactly what a user would give it: the rendered email text, plus
+a typed question — a type (`choice`, `score` or `noul`), a one-line
+instruction, and a short description of each answer option. For example,
+the `category` question is *"Classify this support email into exactly one
+category"*, with options such as billing = *"About invoices, payments,
+refunds, or subscription costs."* Jev never sees `slots.py`,
+realizations, or priors, and it was never trained on this synthetic world.
+It is being tested cold.
+
+Each suite's prediction and the result that would falsify it were written
+into `HYPOTHESES` in `suites.py` *before* the live run. S2 and S3 were
+designated the primary endpoints; S1, S4, S5 and S6 are exploratory. Each
+suite uses 200 items.
+
+| Suite | Tests | Items (built with Part 1's family builders) | Question(s) asked | Compared against | Pre-registered prediction | Falsified if |
+|---|---|---|---|---|---|---|
+| **S1** Resolvable | Is Jev right and confident when the answer is clear? | `category` combinations whose top posterior ≥ 0.97 | `category` (choice) | sampled hard label | accuracy and mean confidence both > 0.9 | either falls below 0.85 |
+| **S2** Known-ambiguous (primary) | Does Jev report intermediate probabilities as intermediate? | a *sweep*: for target P(billing) = 0.3, 0.5, 0.7, 0.9, the closest achievable combination (actually 0.345, 0.533, 0.714, 1.0), 50 items each | `category` (choice) | full exact posterior vector (posterior KL) | mean KL < 0.15 nats | mean KL > 0.3 nats, or errors all in one direction |
+| **S3** Unanswerable (primary) | Does Jev admit it can't know? | ordinary items; asks about `hidden_priority`, which has no evidence in the text | "What priority level should this ticket be assigned?" (choice) | hidden_priority's sampled label; best achievable accuracy = 0.40 (always guess `low`) | accuracy ≤ 0.40 *but* mean confidence above 0.40 — i.e. overconfident | mean confidence within 0.05 of 0.40 |
+| **S4** Type consistency | Do different question types about the same thing agree? | same as S3 | `hidden_priority` asked three ways *in one request*: noul "should this be expedited (high or critical)?", choice (sum P(high) + P(critical)), score (same sum) | exact P(expedite) = 0.2 + 0.1 = 0.30 | the three disagree by > 0.1 | all three agree with each other and 0.30 within 0.05 |
+| **S5** Confidence field | Does Jev's `confidence` carry information beyond max(probabilities)? | 100 resolvable (top posterior ≥ 0.9) + 100 ambiguous (P(billing) ≈ 0.6), so correctness varies | `category` (choice) | AURC of each signal; correlation between them | no meaningful AURC advantage; highly correlated | `confidence` clearly better AURC, or weakly correlated |
+| **S6** Prior sensitivity | Does Jev use a stated base rate correctly? | one ambiguous combination, P(spam) ≈ 0.5 under the true prior | `category` asked twice per email, with the instruction prefixed *"historically, only about 10% … are spam"* vs *"about 60% … are spam"* | Bayes-correct shift: same evidence re-run through the Part 1 rule with each stated prior swapped in | Jev shifts by *less* than the Bayes-correct amount | shift matches Bayes-correct within 0.1 |
+
+Two notes on reading the table. In S1 and S3, "accuracy" means agreement
+with the *sampled* hard label, so even a perfect reader is capped by the
+Bayes error rate. That is why S3's yardstick is 0.40, not 1.0. And S2 is
+the only suite that grades Jev's full probability vector against the full
+exact posterior. The others grade a chosen label, one derived probability,
+or a shift.
+
 ---
 
-## Part 3 — Uncertainty: what's built, and what's only designed
+## Part 3 — Results
+
+Two experiments used the same answer key. The toy model (Part 2) asks
+whether training on the exact posterior produces a better-calibrated model
+than training on one sampled label. The live probe asks how close the real
+Jev's probabilities come to that same exact posterior. Every number below
+is read directly from `outputs/` — `toy_experiment/summary.json` and
+`probe_results.json` — not from memory or from the README's prose.
+
+### Toy model: soft vs. hard training
+
+Protocol as in Part 2 ("The toy experiment's protocol"). Values are
+mean ± std across the three training seeds. Where a std is omitted, it
+rounds to zero at the precision shown.
+
+**The headline, on the `category` head:**
+
+| Eval set | Accuracy (soft) | Accuracy (hard) | Mean KL from truth (soft) | Mean KL (hard) | Hard ÷ soft |
+|---|---|---|---|---|---|
+| Held-out | 0.866 ± 0.001 | 0.869 ± 0.002 | 0.00016 | 0.00331 ± 0.0003 | 20× |
+| Ambiguous | 0.498 ± 0.000 | 0.498 ± 0.000 | 0.00039 ± 0.0001 | 0.00936 ± 0.0003 | 24× |
+| Resolvable | 1.000 | 1.000 | 0.00010 | 0.00097 ± 0.0002 | 10× |
+| Unanswerable family | 0.761 ± 0.001 | 0.759 ± 0.001 | 0.00022 | 0.00536 ± 0.0002 | 24× |
+
+"Mean KL from truth" is the posterior KL divergence from `eval/metrics.py`,
+in nats. It measures how far the model's whole predicted distribution is
+from the exact posterior, item by item. Zero means a perfect match, and
+unlike ECE it needs no binning.
+
+**What this shows.** The two training modes are indistinguishable on
+accuracy, and on AURC (held-out: 0.0174 vs 0.0176), which measures how well
+a model ranks its confident predictions above its unsure ones. They
+differ by 10–24× on how close their stated probabilities are to the true
+ones. This is the reliability/resolution split from the Brier
+decomposition (`docs/explainers.md`), seen empirically. Both models *rank*
+items equally well; only the soft-trained one reports the right *numbers*.
+The same pattern holds on the other two heads that fit well:
+`is_business` (hard ÷ soft ≈ 27–43×) and `hidden_priority` (≈ 115–160×),
+though the absolute KLs there are tiny for both modes (under 0.003).
+
+**Why accuracy is *exactly* equal on the ambiguous set.** That set uses a
+single forced combination of realizations, so every item has the same
+evidence and the same true posterior. Any model that puts its highest
+probability on the right label will pick the same answer for all 1,000
+items, and its accuracy is then just the fraction of sampled hard labels
+that happen to match that answer: 0.498, for both modes, on every seed.
+Accuracy cannot see the difference between a model saying 0.51 and one
+saying 0.99 here; posterior KL can (24×). This is the clearest single
+illustration in the project of why accuracy alone is the wrong yardstick
+for calibration.
+
+**`hidden_priority` (unanswerable by construction): both modes got it
+right.** The best possible strategy is to report the prior and guess
+`low`. Both modes do exactly that: accuracy is identical between them on
+every eval set (0.404 held-out, 0.400 unanswerable family, 0.386
+ambiguous — the variation is only which hard labels happened to be
+sampled into each set). Soft training's KL from the prior is essentially
+zero (0.00002). Hard training's is small but consistently larger
+(≈ 0.0024) across every seed.
+
+**Accuracies slightly above the "ceiling" are not a bug.** A couple of
+accuracies edge past Bayes-optimal: `is_business` held-out 0.7095 against a
+ceiling of 0.700, and `hidden_priority` 0.4037 against 0.400. Part 1's
+Bayes error rate is an *expected* error rate. On a finite test set, the
+sampled hard labels can land slightly luckier than expected. For
+`is_business` on 6,440 items that's about 1.7 standard errors, well within
+normal sampling noise. A model beating the ceiling *on average across many
+fresh samples* would be a bug; one test set doing so is not.
+
+**Honest limitation — `urgency` underfit.** Held-out accuracy 0.48 against
+a Bayes-optimal 0.56 (Bayes error 0.440 from Part 1), and a mean KL of
+≈ 0.20 for *both* modes, two orders of magnitude worse than `category`.
+Soft vs. hard differ only slightly (0.2012 vs 0.2076). The likely cause is
+the ordinal head, which describes all four urgency levels with a single
+score, and probably can't represent this posterior shape well. More
+epochs might also help. Treat any urgency-specific conclusion as
+unsupported until this is fixed.
+
+**Negative control passed.** Retraining on the same data with `category`
+labels randomly shuffled gives 0.236 held-out accuracy, against 0.25 for
+random guessing. The pipeline learns nothing when there's nothing to learn,
+as it must. (This was a single run: it's a sanity check, not a headline
+claim.)
+
+**A caveat on ECE.** ECE, the more familiar calibration metric, also
+favors soft (held-out `category`: 0.0048 vs 0.0103). But ECE depends on
+how predictions are grouped into bins. The reliability-diagram PNGs in
+`outputs/toy_experiment/` use 10 bins with equal numbers of items; the
+table above uses 15 bins of equal width. So the two report different ECE
+values for the same model. Posterior KL is the binning-free comparison and
+the one to trust.
+
+### Live probe: the real Jev, graded against the exact posterior
+
+Suites as described in Part 2 ("The live probe: six suites against the
+real Jev"). Model `typesafe/jev-1.13-20260917`, reached through OpenRouter
+on 2026-09-26. The probe was run twice. The first run exposed a gap in
+the `complaint_phrase` table: nothing in it could produce a P(billing)
+between 0.37 and 1.0. So the `mixed_lean` and `strong_lean` realizations
+were added (the same `strong_lean` used in Part 1's Step 2), and the probe
+was re-run. The numbers below are from the second run. The first is kept
+at `outputs/probe_results_run1_20260925.json`.
+
+| Suite | Question put to Jev | Exact truth | What Jev said | Verdict |
+|---|---|---|---|---|
+| **S2** (primary) | `category`, on 4 combinations whose P(billing) is 0.345 / 0.533 / 0.714 / 1.0 | those values | see table below; mean KL **3.66 nats**, median 3.20 | **Prediction falsified** (needed KL < 0.15) |
+| **S3** (primary) | `hidden_priority` as a choice question | prior; best achievable accuracy 0.40 | accuracy **0.265** (95% CI 0.209–0.330), mean confidence **0.672** | **Confirmed**: overconfident on an unanswerable question |
+| S1 | `category`, resolvable items (top posterior ≥ 0.97) | near one-hot | accuracy 0.91 (CI 0.862–0.942), mean confidence 0.943, ECE 0.061 | Confirmed: good on easy items |
+| S4 | `hidden_priority` "expedite?" asked 3 ways (noul / choice / score) | P = 0.30 for all three | 0.288 / 0.366 / 0.363 on average; per item, noul differs from choice by 0.167 on average | Confirmed: framings disagree |
+| S5 | does `confidence` add anything beyond max(probabilities)? | — | correlation 0.9998; AURC 0.1339 vs 0.1341 | Confirmed: `confidence` ≈ max probability |
+| S6 | same email, stated spam base rate changed from 10% to 60% | Bayes-correct shift in P(spam): +0.568 | shifted in the right direction on 200/200 items, but by only +0.389 on average | Confirmed: underweights stated priors |
+
+**S2 in detail.** This is the result that needs an exact, adjustable
+posterior to see at all. For each combination, 50 items, comparing
+Jev's average reported P(billing) against the truth:
+
+| True P(billing) | Jev's mean reported P(billing) | Direction |
+|---|---|---|
+| 0.345 | 0.011 (18 of 50 exactly 0) | far too low |
+| 0.533 | 0.307 | too low |
+| 0.714 | **0.997** | far too high |
+| 1.000 | 1.000 | correct (trivially) |
+
+Jev doesn't report the intermediate value. It pushes it toward whichever
+extreme is nearer, with the switch from too-low to too-high somewhere
+between true P = 0.53 and 0.71 (4 levels × 50 items locate a range, not
+an exact switch point). This "extremizing" is the pattern the first run
+*couldn't* show: with no combination between 0.37 and 1.0 available, only
+the too-low half was visible. Adding `strong_lean` / `mixed_lean` didn't
+just add data points; it revealed errors in the opposite direction that
+the narrower table couldn't reach.
+
+**S3 in detail.** On `hidden_priority`, the text contains no information
+about the answer, by construction (Part 1). The best any reader can do is
+report the prior and guess `low`, which is right 40% of the time. Jev did
+worse than that (26.5%, with the entire confidence interval below 0.40)
+while reporting 67% confidence. That's an overconfidence gap of +0.27 on a
+question it cannot, even in principle, answer from the text. This
+replicates the independently published result (44.7% accuracy, 0.74
+confidence) on a separately built, provably unanswerable item with a
+different prior.
+
+### Reading the two together
+
+The toy model, trained with soft targets on this world, reports the prior
+for `hidden_priority` almost exactly; Jev reports 67% confidence. So that
+failure isn't inevitable for a one-pass encoder with typed heads. With
+clean training, a model this shape handles an unanswerable question
+correctly. **This is not a like-for-like comparison, though.** The toy
+model was trained on this exact synthetic world, and Jev never saw it.
+The fair conclusion is "Jev's behavior here isn't forced by its
+architecture," not "Jev was trained with hard labels." The toy results
+support soft-target training as *one* mechanism that produces good
+calibration. They don't identify what Jev's training actually did.
+
+Similarly, the toy model's KL numbers (≈ 0.0002–0.009) and Jev's S2 KL
+(3.66) are on the same scale but not comparable as a score: one model is
+in-distribution and the other is being tested cold. What *is* comparable
+is the shape. Both of the toy models, trained in-distribution, report
+intermediate probabilities as intermediate. Jev pushes them toward the
+extremes.
+
+---
+
+## Part 4 — Uncertainty: what's built, and what's only designed
 
 Two different kinds of "the model isn't sure," worth keeping strictly
 separate (`docs/explainers.md` has the formal definitions):
