@@ -122,6 +122,10 @@ class TrainConfig:
     seed: int = 0
     log_every: int = 50
     device: Optional[torch.device] = None
+    # Keep the weights from the epoch with the lowest validation loss against
+    # HARD labels (the only labels a practitioner has), instead of the last
+    # epoch. Requires val_items.
+    select_best_on_val: bool = False
 
 
 @dataclass
@@ -151,12 +155,14 @@ def train_model(
     history = TrainHistory()
     model.train()
     step = 0
+    best_val_loss, best_state = float("inf"), None
     for epoch in range(config.epochs):
         epoch_losses = []
+        epoch_parts: Dict[str, List[float]] = {}
         for batch in train_loader:
             batch = {k: v.to(device) for k, v in batch.items()}
             outputs = model(batch["input_ids"], batch["attention_mask"])
-            loss, _parts = compute_loss(outputs, batch, config.mode)
+            loss, parts = compute_loss(outputs, batch, config.mode)
 
             optimizer.zero_grad()
             loss.backward()
@@ -167,19 +173,49 @@ def train_model(
             loss_val = loss.item()
             history.train_loss_by_step.append(loss_val)
             epoch_losses.append(loss_val)
+            for k, v in parts.items():
+                epoch_parts.setdefault(k, []).append(v)
             step += 1
             if step % config.log_every == 0:
                 print(f"[{config.mode}] epoch {epoch} step {step} loss {loss_val:.4f}")
 
         summary = {"epoch": epoch, "mean_train_loss": float(np.mean(epoch_losses))}
+        summary.update({f"train_loss_{k}": float(np.mean(v)) for k, v in epoch_parts.items()})
         if val_items:
             val_metrics = evaluate(model, val_items, tokenizer, device, max_length=config.max_length)
             summary["val_category_ece"] = val_metrics["category"]["ece"]
             summary["val_category_acc"] = val_metrics["category"]["accuracy"]
+            if config.select_best_on_val:
+                val_loss = hard_val_loss(model, val_items, tokenizer, device, max_length=config.max_length)
+                summary["val_hard_loss"] = val_loss
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+                    summary["best_so_far"] = True
+            model.train()  # evaluate() switches to eval mode; restore dropout for the next epoch
         history.epoch_summaries.append(summary)
         print(f"[{config.mode}] epoch {epoch} summary: {summary}")
 
+    if best_state is not None:
+        model.load_state_dict(best_state)
     return model, history
+
+
+@torch.no_grad()
+def hard_val_loss(model: TypedSystemOneModel, items: List[Item], tokenizer, device, max_length=64, batch_size=64) -> float:
+    """Mean hard-label training loss (all heads) on held-out items: what a
+    practitioner with only observed outcomes can compute for model selection."""
+    ds = ToyDataset(items, tokenizer, max_length=max_length)
+    loader = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
+    model.eval()
+    total, n = 0.0, 0
+    for batch in loader:
+        batch = {k: v.to(device) for k, v in batch.items()}
+        outputs = model(batch["input_ids"], batch["attention_mask"])
+        loss, _ = compute_loss(outputs, batch, "hard")
+        total += loss.item() * len(batch["input_ids"])
+        n += len(batch["input_ids"])
+    return total / max(n, 1)
 
 
 # ---------------------------------------------------------------------------

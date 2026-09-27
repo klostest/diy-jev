@@ -5,7 +5,7 @@
        +--------+--------+--------+
        |        |        |        |
    category  urgency  is_business hidden_priority
-   (choice)   (score)   (noul)    (noul+choice+score, 3 heads on 1 pooled vec)
+   (choice)  (choice)   (noul)    (noul+choice+score, 3 heads on 1 pooled vec)
 
 Each concept gets its own learned query embedding that cross-attends over the
 encoder's token states (attention pooling). This reproduces the two
@@ -79,7 +79,12 @@ class TypedSystemOneModel(nn.Module):
         self.cross_attn = nn.MultiheadAttention(hidden, num_heads=n_attn_heads, batch_first=True)
 
         self.category_head = nn.Linear(hidden, len(CATEGORY_LABELS))
-        self.urgency_head = OrdinalHead(hidden, len(URGENCY_LEVELS))
+        # Plain softmax, not OrdinalHead: with the ordinal head, urgency stalled
+        # at ~0.20 nats held-out KL after 3 epochs (training loss flat well above
+        # its entropy floor), while a softmax head reached ~0.005 under the same
+        # config. The proportional-odds form can represent these posteriors
+        # (direct fit: 0.011 nats) but trains far more slowly here.
+        self.urgency_head = nn.Linear(hidden, len(URGENCY_LEVELS))
         self.is_business_head = nn.Linear(hidden, 1)
 
         # HIDDEN_PRIORITY: three views of the same pooled vector, mirroring
@@ -111,7 +116,7 @@ class TypedSystemOneModel(nn.Module):
 
         return {
             "category": F.softmax(self.category_head(cat_p), dim=-1),
-            "urgency": self.urgency_head(urg_p),
+            "urgency": F.softmax(self.urgency_head(urg_p), dim=-1),
             "is_business": torch.sigmoid(self.is_business_head(biz_p)).squeeze(-1),
             "hidden_priority_noul": torch.sigmoid(self.hp_noul_head(hp_p)).squeeze(-1),
             "hidden_priority_choice": F.softmax(self.hp_choice_head(hp_p), dim=-1),

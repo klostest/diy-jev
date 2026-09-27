@@ -29,6 +29,7 @@ twice:
 Full rationale: [`/Users/steve/.claude/plans/hi-i-m-curious-about-cosmic-pelican.md`](file:///Users/steve/.claude/plans/hi-i-m-curious-about-cosmic-pelican.md).
 Math and transformer background: [`jev/docs/explainers.md`](jev/docs/explainers.md).
 How the pieces connect end to end, with a worked example: [`EXPERIMENTAL_SETUP.md`](EXPERIMENTAL_SETUP.md).
+What the experiments found, and what it does and doesn't say about Jev: [`RESULTS_AND_DISCUSSION.md`](RESULTS_AND_DISCUSSION.md).
 
 ## Quick start
 
@@ -72,6 +73,7 @@ jev/
     explainers.md              # calibration math + transformer background, with LaTeX
 scripts/
   run_toy_experiment.py         # the actual soft-vs-hard experiment + report
+  run_head_to_head.py           # Jev (raw / recalibrated) vs. own model on the same 6,440 emails
 tests/                           # 80+ tests -- see "Verification" below
 outputs/                          # generated: results.json, reliability diagrams, logs
 ```
@@ -190,14 +192,14 @@ now much better attested.)
 
 **Resolution is shared; reliability is not.** On the `category` head
 (held-out split), soft and hard training reach essentially the same
-accuracy (0.8664±0.0007 vs 0.8687±0.0017) and near-identical AURC
+accuracy (0.868±0.002 vs 0.867±0.002) and near-identical AURC
 (0.0174±0.0002 vs 0.0176±0.0001 — see `risk_coverage_category.png`): the
 two models rank confident-vs-unsure items identically well. But mean
-posterior KL divergence from the true label distribution is **16.5x lower
-for soft training** (0.0002±0.0000 vs 0.0033±0.0003), and on the
+posterior KL divergence from the true label distribution is **19x lower
+for soft training** (0.0002±0.0000 vs 0.0036±0.0001), and on the
 deliberately-ambiguous item family built via `build_ambiguous` — where the
 true posterior is genuinely non-degenerate, not near one-hot — the gap
-widens to **23.5x** (0.0004±0.0001 vs 0.0094±0.0003) while accuracy is
+widens to **30x** (0.0005±0.0000 vs 0.0136±0.0056) while accuracy is
 identical (0.498±0.0000 for both, exactly, every seed). This is the Brier
 decomposition's reliability/resolution split (`docs/explainers.md`) showing
 up empirically: same architecture, same accuracy, same *ranking* of
@@ -216,11 +218,12 @@ comparison is binning-independent and is the one to trust.)
 **The unanswerable concept (`hidden_priority`) was solved correctly by
 both, consistently.** True posterior is exactly the prior everywhere
 (Bayes-optimal accuracy 0.400). Both soft- and hard-trained models land at
-accuracy exactly 0.4037±0.0000 / 0.3860±0.0000 across every seed — both
+identical accuracy on every eval set and every seed (0.404 held-out, 0.386 on
+the ambiguous set — the sets differ only in which hard labels were sampled) — both
 learned to report close to the prior on a question the text cannot answer.
 One reproducible nuance visible only with multiple seeds: soft training's
 mean KL is essentially exact (0.0000±0.0000), while hard's is small but
-consistently nonzero (0.0018–0.0024±0.0002–0.0004) — hard gets very close
+consistently nonzero (0.0021–0.0025±0.0003–0.0004) — hard gets very close
 to the prior but not quite as exactly as soft does, reliably, across every
 seed. Both still comfortably beat the real Jev's published failure on an
 analogous unanswerable question (44.7% accuracy, 0.74 mean confidence) —
@@ -229,23 +232,29 @@ architecture/loss family under clean training, something about Jev's
 actual training distribution or objective is producing it. Suite S3 tests
 this directly against the real API (see below).
 
-**Honest limitation: the `urgency` head underfit.** Its accuracy
-(0.44–0.48) sits well below its Bayes-optimal ceiling, and mean KL (~0.20)
-is far higher than category's — the ordinal cumulative-link head likely
-needs more capacity, more epochs, or a less restrictive parameterization
-than a single latent utility can offer for this posterior shape. Soft vs.
-hard show only a small gap on this head (0.2012±0.0001 vs 0.2076±0.0003 on
-held-out — real and consistent, but nowhere near category's 16–23x) —
-consistent with both modes being too far from converged for the full
-target-choice effect to show through. Worth revisiting before trusting any
-urgency-specific conclusion — flagged rather than glossed over.
+**The `urgency` head: underfit, diagnosed, fixed.** An earlier version used
+an ordinal (cumulative-link) head for `urgency` and stalled at accuracy 0.48
+(ceiling 0.56) and mean KL ~0.20. Diagnostic runs showed the ordinal form
+could represent the posteriors but trained far too slowly (8 epochs only
+reached 0.13); a plain softmax head fit in 3 epochs. With it, held-out
+urgency accuracy is 0.560/0.562 (soft/hard) and mean KL 0.0002/0.0043 — the
+same soft-vs-hard pattern as category. Details in `RESULTS_AND_DISCUSSION.md`;
+the earlier outputs are archived in `outputs/toy_experiment_ordinal_urgency_20260926/`.
 
-**Shuffled-label negative control passed.** Accuracy 0.236 against a
+**Shuffled-label negative control passed.** Accuracy 0.253 against a
 uniform-random baseline of 0.25 (single run — this is a sanity check, not a
 headline claim needing seed replication) — the pipeline learns nothing from
 permuted labels, as it must.
 
 ### Live probe: what S1–S6 found against the real Jev API
+
+> **Read with `RESULTS_AND_DISCUSSION.md`.** Re-checking these results found
+> caveats not reflected below: S2's 3.66 nats is dominated by Jev's exact-zero
+> probabilities under a 1e-12 floor (0.67 nats treating Jev's two-decimal
+> zeros as 0.005 — still falsified); all 18 S1 misses are feature requests,
+> which the tables label *sales*; S3's low accuracy comes from Jev reading
+> urgency wording as priority; and S6's "underweights the stated prior" does
+> not hold against Jev's own starting belief.
 
 `typesafe/jev-1.13-20260917`, via OpenRouter, n=200/suite. Organized by the
 plan's own pre-registered split: S2 and S3 are the primary endpoints; S1,

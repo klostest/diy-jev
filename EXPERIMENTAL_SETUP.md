@@ -4,7 +4,14 @@ A from-first-principles walkthrough of how this project actually works, end
 to end. `docs/explainers.md` is the math/concepts reference (what is a
 proper scoring rule, what is attention); this document is the plumbing —
 how the pieces in *this* repo connect, in the order data actually flows
-through them.
+through them. It covers the whole design — including exactly how every
+result is measured (Part 3) — so that `RESULTS_AND_DISCUSSION.md` can be
+read without introducing anything new.
+
+> **On `$` in this file:** following `docs/explainers.md`, `$...$` in
+> Part 3 are real LaTeX math delimiters, a deliberate exception to the
+> project's convention of escaping dollar signs. A literal currency amount
+> would still be escaped (\$).
 
 ## The idea in one paragraph
 
@@ -376,10 +383,12 @@ claims):
   against a 52.0% majority-class baseline — indistinguishable from chance,
   exactly as it should be since every one of those items has identical
   evidence).
-- **Nothing can beat the Bayes rate.** Since it's computed exactly, "a
-  model scored below the Bayes error rate" is not a good result, it's a
-  bug report. Checked in tests, both on the generator's own oracle
-  predictor and, implicitly, on every real result this project reports.
+- **Nothing can beat the Bayes rate.** Since it's computed exactly, a
+  model whose *expected* error rate is below the Bayes error rate is not a
+  good result, it's a bug report. (On one finite test set, a model can
+  land slightly below it by luck in which hard labels were sampled; the
+  ceiling applies to the long-run average.) Checked in tests on the
+  generator's own oracle predictor.
 
 ---
 
@@ -414,7 +423,7 @@ encoder (MiniLM, one pass)  -->  token vectors
  pooling         pooling         pooling          pooling            matmul each,
    |               |               |               |                 not another
    v               v               v               v                 encoder pass
- choice head    ordinal head    noul head        3 heads (noul/
+ choice head    choice head     noul head        3 heads (noul/
    |               |               |             choice/score)
    v               v               v               v
 predicted       predicted       predicted        predicted
@@ -464,16 +473,16 @@ the *only* difference between the "soft" and "hard" experiment runs is
 which of these two loss functions is called. That difference is the entire
 toy-model experiment in this repo: does seeing the full table-derived
 distribution during training produce a better-calibrated model than seeing
-only one sampled draw from it? (Answer, from the multi-seed run: yes,
-sharply, on posterior-KL — see `README.md`.)
+only one sampled draw from it? (The answer is in
+`RESULTS_AND_DISCUSSION.md`, measured with the metrics defined in Part 3.)
 
 ### The same table, reused a second time, for evaluation
 
 `toy/train.py`'s `evaluate()` and `probe/suites.py` both do the same thing
 with the table: take a batch of items, get the generator's exact posterior
 for each, get the model's (or Jev's) predicted distribution for each, and
-compare — via ECE, the Brier decomposition, or posterior KL
-(`eval/metrics.py`, `docs/explainers.md`). The training-time use and the
+compare them using the metrics defined in Part 3 (code in
+`eval/metrics.py`, theory in `docs/explainers.md`). The training-time use and the
 evaluation-time use are the same data, doing two different jobs: one is a
 loss to descend, the other is an answer key to grade against.
 
@@ -491,7 +500,10 @@ loss to descend, the other is an answer key to grade against.
 - **Training.** Each mode (soft, hard) is trained with 3 seeds
   (100/101/102) for 3 epochs, batch size 32. Learning rates are 2e-5 for
   the encoder and 2e-4 for the heads. Nothing differs between the modes
-  except the loss function.
+  except the loss function. (The `urgency` head is a plain softmax over the
+  four levels. An earlier version used an ordinal head that builds in the
+  low < medium < high < critical ordering; it trained too slowly to fit in
+  3 epochs, and `RESULTS_AND_DISCUSSION.md` reports that diagnosis.)
 - **Evaluation sets.** Every trained model is scored on four sets: the
   held-out test split, plus 1,000 items each from the three families in
   Part 1. Those are *resolvable* (top posterior ≥ 0.97), *unanswerable*
@@ -503,18 +515,112 @@ loss to descend, the other is an answer key to grade against.
 - **Negative control.** One extra hard-mode run, 2 epochs, with the
   `category` labels randomly shuffled. It must score at chance.
 
+### How we talk to Jev
+
+Jev isn't a chatbot. You don't converse with it, and it never writes free
+text. Each call sends it one piece of text, called the **state**, plus one
+or more named **questions** about that text. It returns a structured answer
+to each question, with probabilities. That's the entire interface.
+
+**A real call, verbatim** (from `outputs/jev_cache.jsonl`, an S1 item).
+The request:
+
+```json
+{
+  "state": "From: sofia.costa@gmail.com\nSubject: Quick note\n\nDear Support Team,\nCould you add a dark mode option? Whenever you get a chance.\n\nBest regards,\nSofia Costa\nOperations Manager, Riverstone Logistics",
+  "questions": {
+    "category": {
+      "type": "choice",
+      "instructions": "Classify this support email into exactly one category.",
+      "criteria": {
+        "billing":   "About invoices, payments, refunds, or subscription costs.",
+        "technical": "About bugs, crashes, error codes, or app malfunctions.",
+        "sales":     "About pricing, plan features, or discounts.",
+        "spam":      "Unsolicited marketing, or an unsubscribe request."
+      }
+    }
+  }
+}
+```
+
+The response:
+
+```json
+{
+  "model": "typesafe/jev-1.13-20260917",
+  "answers": {
+    "category": {
+      "type": "choice",
+      "choice": "technical",
+      "probabilities": {"technical": 0.66, "sales": 0.34, "billing": 0, "spam": 0},
+      "confidence": 0.54
+    }
+  },
+  "usage": {"input_tokens": 424, "output_tokens": 45, "cost": 1.7808e-05}
+}
+```
+
+**Anatomy of a question.** Every question has three parts:
+
+- **`type`** — one of Jev's three answer shapes:
+  - `choice` (pick one of several options; returns `choice`, a probability
+    per option, and `confidence`),
+  - `noul` (yes/no; returns a single probability of "yes" as `noul`),
+  - `score` (a position on an ordered scale; returns an expected `score`, a
+    `legend` mapping positions 0, 1, 2, … to the scale's names, a probability
+    per position, and `confidence`).
+- **`instructions`** — the question in plain English.
+- **`criteria`** — the answer options. For `choice` and `noul`, each option
+  carries a one-line description that we wrote. For `score`, it's just the
+  ordered list of level names.
+
+**The criteria are Jev's only definition of each label.** Jev never sees
+`slots.py`, realizations, priors or this document, and it was never trained
+on this synthetic world. It's tested cold, the way a customer would use it.
+So when Jev decides whether "Could you add a dark mode option?" is *sales*
+or *technical*, all it has to go on is the four descriptions above plus
+its own general sense of how support email works. Our tables say feature
+requests are always sales, and "plan features" in the sales description is
+meant to cover them. Jev's answer above leans technical. Where our
+definitions and Jev's own sense of the world differ, it can disagree with
+the answer key for reasons that have nothing to do with calibration.
+`RESULTS_AND_DISCUSSION.md` flags each result where this matters.
+
+**Every question used, word for word** (defined at the top of
+`jev/probe/suites.py`):
+
+| Name | Type | Instructions | Criteria | Used in |
+|---|---|---|---|---|
+| category | `choice` | "Classify this support email into exactly one category." | billing: "About invoices, payments, refunds, or subscription costs." · technical: "About bugs, crashes, error codes, or app malfunctions." · sales: "About pricing, plan features, or discounts." · spam: "Unsolicited marketing, or an unsubscribe request." | S1, S2, S5, S6 |
+| priority (choice) | `choice` | "What priority level should this ticket be assigned?" | low: "Low priority" · medium: "Medium priority" · high: "High priority" · critical: "Critical priority" | S3, S4 |
+| priority (yes/no) | `noul` | "Should this ticket be expedited, i.e. treated as high or critical priority?" | true: "Should be treated as high or critical priority." · false: "Standard priority is fine." | S4 |
+| priority (score) | `score` | "Rate the priority level this ticket should be assigned." | low, medium, high, critical | S4 |
+
+Two suites alter or combine these:
+
+- **S4** sends all three priority questions in a *single* request, about
+  the same email, so all three answers come from one reading of the text.
+- **S6** sends the category question twice per email, with a sentence added
+  to the front of the instructions: *"Context: historically, only about 10%
+  of tickets in this queue turn out to be spam."* or *"Context:
+  historically, about 60% of tickets in this queue turn out to be spam."*
+
+**Plumbing.** TypeSafe's own signup was paused when this was run, so calls
+went through OpenRouter, a gateway that forwards requests to many model
+providers (`POST https://openrouter.ai/api/v1/systemone`, with the model
+named in the payload). Every response reported model
+`typesafe/jev-1.13-20260917` and provider `TypeSafe`. `probe/client.py`
+appends every live request and response to `outputs/jev_cache.jsonl`, so
+any result can be re-derived offline without paying again. Each email was
+sent once per question set: there are no repeat calls on the same email,
+so call-to-call variation in Jev's answers isn't measured. Across both
+probe runs, 2,803 calls cost \$0.05 in total.
+
 ### The live probe: six suites against the real Jev
 
-`jev/probe/suites.py` sends generated emails to the real Jev API (via
-`probe/client.py`) and grades the answers against the exact posterior.
-Jev gets exactly what a user would give it: the rendered email text, plus
-a typed question — a type (`choice`, `score` or `noul`), a one-line
-instruction, and a short description of each answer option. For example,
-the `category` question is *"Classify this support email into exactly one
-category"*, with options such as billing = *"About invoices, payments,
-refunds, or subscription costs."* Jev never sees `slots.py`,
-realizations, or priors, and it was never trained on this synthetic world.
-It is being tested cold.
+`jev/probe/suites.py` builds emails with the generator, sends them to Jev
+using the questions above, and grades the answers against the exact
+posterior.
 
 Each suite's prediction and the result that would falsify it were written
 into `HYPOTHESES` in `suites.py` *before* the live run. S2 and S3 were
@@ -535,171 +641,407 @@ with the *sampled* hard label, so even a perfect reader is capped by the
 Bayes error rate. That is why S3's yardstick is 0.40, not 1.0. And S2 is
 the only suite that grades Jev's full probability vector against the full
 exact posterior. The others grade a chosen label, one derived probability,
-or a shift.
+or a shift. Every metric named in this table is defined, with its equation,
+in Part 3, along with what the pass/fail thresholds mean.
+
+### Head-to-head: Jev vs. a model trained on your own labels
+
+The suites test Jev on purpose-built email sets. A practitioner's question
+is different: *I have some labeled historical emails. Should I use Jev, fix
+Jev's probabilities using my labels, or train my own model, and how many
+labels does each option need?* `scripts/run_head_to_head.py` answers that
+by putting every option on the **same** emails.
+
+- **Emails.** All 6,440 emails in the toy experiment's held-out test split:
+  a natural mix of difficulty, made of clue combinations no toy model
+  trained on. They are shuffled once and split into a **calibration pool**
+  of 2,000 emails, the labeled data available for fixing Jev, and an
+  **evaluation set** of 4,440, where every option below is scored. Nothing
+  is ever scored on emails it learned from.
+- **Jev.** One request per email asking two questions together: `category`
+  and priority (the `choice` version), worded exactly as in "How we talk to
+  Jev." That's 6,440 live calls, all cached, all from
+  `typesafe/jev-1.13-20260917`.
+- **Jev + your labels.** Three ways of adjusting Jev's probabilities (Part
+  3, "Recalibrating Jev"), each fitted on 50, 200, 1,000 or 2,000 labeled
+  emails from the calibration pool. Each size is repeated with 3 different
+  random subsets, except 2,000, which is the whole pool.
+- **Your own model.** The toy model, trained on *hard labels only*, because
+  a business has observed outcomes, not true probabilities. It's trained on
+  50, 200, 1,000, 5,000 or all 23,560 labeled training emails, 3 seeds each
+  (each seed also draws a different subset). Of each set, 20% is held back
+  and the model keeps the weights from the epoch with the lowest loss on
+  those held-back hard labels. That's standard practice, and it uses no
+  information a practitioner wouldn't have. Smaller sets get more epochs
+  (up to 40), so each run takes roughly the same number of training steps.
+  The "labels used" count includes the held-back 20%.
+- **Reference lines.** A soft-trained toy model on all training emails (the
+  best a model can do when shown the true probabilities, which no business
+  has), and the **exact posterior** itself (the ceiling: the best possible
+  accuracy, zero KL, and the best possible ranking).
+- **Metrics** (Part 3): accuracy, posterior KL, ECE and AURC on the
+  4,440 evaluation emails, as mean ± std across the repeats or seeds. Jev's
+  raw KL uses the rounding-aware floor, with the pre-registered floor
+  reported alongside. On the priority question AURC isn't meaningful: the
+  true answer is the same for every email, so there's no correct ranking.
 
 ---
 
-## Part 3 — Results
+## Part 3 — How results are measured
 
-Two experiments used the same answer key. The toy model (Part 2) asks
-whether training on the exact posterior produces a better-calibrated model
-than training on one sampled label. The live probe asks how close the real
-Jev's probabilities come to that same exact posterior. Every number below
-is read directly from `outputs/` — `toy_experiment/summary.json` and
-`probe_results.json` — not from memory or from the README's prose.
+Every number in `RESULTS_AND_DISCUSSION.md` is one of the quantities
+defined below. For each one: what it means in words, the exact equation
+(matching the code in `jev/eval/metrics.py` or `jev/probe/suites.py`), a
+small worked example, and where it's used. `docs/explainers.md` has the
+deeper theory behind several of these (why a scoring rule is "proper,"
+where the Brier decomposition comes from); this part only defines them.
 
-### Toy model: soft vs. hard training
+### Notation
 
-Protocol as in Part 2 ("The toy experiment's protocol"). Values are
-mean ± std across the three training seeds. Where a std is omitted, it
-rounds to zero at the precision shown.
+For item $i$ (out of $N$ items in a set):
 
-**The headline, on the `category` head:**
+- $p_{\text{true},i}$ — the exact posterior from Part 1: the correct
+  probability for every label, given the realizations this item's text was
+  built from. $p_{\text{true},i}(y)$ is its value for one label $y$.
+- $p_{\text{model},i}$ — the distribution the model (the toy model, or
+  Jev) reports for the same item.
+- $\hat y_i$ — the label the model picks (its highest-probability label, or
+  Jev's `choice`).
+- $\hat p_i$ — the model's **confidence** in that pick. For the toy model
+  it's the highest probability it reports (for a yes/no head,
+  $\max(q, 1-q)$). For Jev it's Jev's own `confidence` field, falling back
+  to its highest probability if the field is missing.
+- $y_i$ — the item's hard label, sampled from $p_{\text{true},i}$ (Part 1).
+- $o_i = \mathbb{1}[\hat y_i = y_i]$ — whether the pick matched the hard
+  label: 1 if so, 0 if not.
 
-| Eval set | Accuracy (soft) | Accuracy (hard) | Mean KL from truth (soft) | Mean KL (hard) | Hard ÷ soft |
-|---|---|---|---|---|---|
-| Held-out | 0.866 ± 0.001 | 0.869 ± 0.002 | 0.00016 | 0.00331 ± 0.0003 | 20× |
-| Ambiguous | 0.498 ± 0.000 | 0.498 ± 0.000 | 0.00039 ± 0.0001 | 0.00936 ± 0.0003 | 24× |
-| Resolvable | 1.000 | 1.000 | 0.00010 | 0.00097 ± 0.0002 | 10× |
-| Unanswerable family | 0.761 ± 0.001 | 0.759 ± 0.001 | 0.00022 | 0.00536 ± 0.0002 | 24× |
+### Accuracy, and its ceiling
 
-"Mean KL from truth" is the posterior KL divergence from `eval/metrics.py`,
-in nats. It measures how far the model's whole predicted distribution is
-from the exact posterior, item by item. Zero means a perfect match, and
-unlike ECE it needs no binning.
+The fraction of items where the model's pick matches the hard label:
 
-**What this shows.** The two training modes are indistinguishable on
-accuracy, and on AURC (held-out: 0.0174 vs 0.0176), which measures how well
-a model ranks its confident predictions above its unsure ones. They
-differ by 10–24× on how close their stated probabilities are to the true
-ones. This is the reliability/resolution split from the Brier
-decomposition (`docs/explainers.md`), seen empirically. Both models *rank*
-items equally well; only the soft-trained one reports the right *numbers*.
-The same pattern holds on the other two heads that fit well:
-`is_business` (hard ÷ soft ≈ 27–43×) and `hidden_priority` (≈ 115–160×),
-though the absolute KLs there are tiny for both modes (under 0.003).
+$$
+\text{accuracy} = \frac{1}{N} \sum_{i=1}^{N} o_i
+$$
 
-**Why accuracy is *exactly* equal on the ambiguous set.** That set uses a
-single forced combination of realizations, so every item has the same
-evidence and the same true posterior. Any model that puts its highest
-probability on the right label will pick the same answer for all 1,000
-items, and its accuracy is then just the fraction of sampled hard labels
-that happen to match that answer: 0.498, for both modes, on every seed.
-Accuracy cannot see the difference between a model saying 0.51 and one
-saying 0.99 here; posterior KL can (24×). This is the clearest single
-illustration in the project of why accuracy alone is the wrong yardstick
-for calibration.
+Because the hard label is itself a random draw, even a perfect reader
+can't score 100% on an item that's genuinely ambiguous. If the truth is
+70% billing / 30% technical, the best possible move is always to pick
+billing — and that's wrong 30% of the time. So every accuracy here has a
+**ceiling** of $1 - \text{Bayes error rate}$ (the table in Part 1): 0.779
+for `category`, 0.560 for `urgency`, 0.700 for `is_business`, and 0.400 for
+`hidden_priority`, where the best anyone can do is always guess `low`.
 
-**`hidden_priority` (unanswerable by construction): both modes got it
-right.** The best possible strategy is to report the prior and guess
-`low`. Both modes do exactly that: accuracy is identical between them on
-every eval set (0.404 held-out, 0.400 unanswerable family, 0.386
-ambiguous — the variation is only which hard labels happened to be
-sampled into each set). Soft training's KL from the prior is essentially
-zero (0.00002). Hard training's is small but consistently larger
-(≈ 0.0024) across every seed.
+Accuracy only looks at the pick. It can't tell a model that says "51%
+billing" from one that says "99% billing," as long as both pick billing.
+That blind spot is the reason for every other metric below.
 
-**Accuracies slightly above the "ceiling" are not a bug.** A couple of
-accuracies edge past Bayes-optimal: `is_business` held-out 0.7095 against a
-ceiling of 0.700, and `hidden_priority` 0.4037 against 0.400. Part 1's
-Bayes error rate is an *expected* error rate. On a finite test set, the
-sampled hard labels can land slightly luckier than expected. For
-`is_business` on 6,440 items that's about 1.7 standard errors, well within
-normal sampling noise. A model beating the ceiling *on average across many
-fresh samples* would be a bug; one test set doing so is not.
+**How precise is an accuracy on 200 items?** Each suite reports a 95%
+Wilson confidence interval: with $\hat a$ the measured accuracy and
+$z = 1.96$,
 
-**Honest limitation — `urgency` underfit.** Held-out accuracy 0.48 against
-a Bayes-optimal 0.56 (Bayes error 0.440 from Part 1), and a mean KL of
-≈ 0.20 for *both* modes, two orders of magnitude worse than `category`.
-Soft vs. hard differ only slightly (0.2012 vs 0.2076). The likely cause is
-the ordinal head, which describes all four urgency levels with a single
-score, and probably can't represent this posterior shape well. More
-epochs might also help. Treat any urgency-specific conclusion as
-unsupported until this is fixed.
+$$
+\frac{\hat a + \frac{z^2}{2N} \;\pm\; z\sqrt{\frac{\hat a(1-\hat a)}{N} + \frac{z^2}{4N^2}}}{1 + \frac{z^2}{N}}
+$$
 
-**Negative control passed.** Retraining on the same data with `category`
-labels randomly shuffled gives 0.236 held-out accuracy, against 0.25 for
-random guessing. The pipeline learns nothing when there's nothing to learn,
-as it must. (This was a single run: it's a sanity check, not a headline
-claim.)
+Worked example: 53 correct out of 200 ($\hat a = 0.265$) gives the interval
+0.209–0.330. Read it as "the true long-run accuracy is very likely in this
+range; a different 200 items could plausibly have landed anywhere in it."
+(`metrics.wilson_ci`.)
 
-**A caveat on ECE.** ECE, the more familiar calibration metric, also
-favors soft (held-out `category`: 0.0048 vs 0.0103). But ECE depends on
-how predictions are grouped into bins. The reliability-diagram PNGs in
-`outputs/toy_experiment/` use 10 bins with equal numbers of items; the
-table above uses 15 bins of equal width. So the two report different ECE
-values for the same model. Posterior KL is the binning-free comparison and
-the one to trust.
+### Posterior KL: how far the reported probabilities are from the truth
 
-### Live probe: the real Jev, graded against the exact posterior
+This is the project's main metric, and the one only a known answer key
+makes possible. It compares the model's *whole* reported distribution
+against the exact one, item by item:
 
-Suites as described in Part 2 ("The live probe: six suites against the
-real Jev"). Model `typesafe/jev-1.13-20260917`, reached through OpenRouter
-on 2026-09-26. The probe was run twice. The first run exposed a gap in
-the `complaint_phrase` table: nothing in it could produce a P(billing)
-between 0.37 and 1.0. So the `mixed_lean` and `strong_lean` realizations
-were added (the same `strong_lean` used in Part 1's Step 2), and the probe
-was re-run. The numbers below are from the second run. The first is kept
-at `outputs/probe_results_run1_20260925.json`.
+$$
+\text{KL}\bigl(p_{\text{true},i} \,\big\|\, p_{\text{model},i}\bigr) = \sum_{y} p_{\text{true},i}(y)\, \ln \frac{p_{\text{true},i}(y)}{p_{\text{model},i}(y)}
+$$
 
-| Suite | Question put to Jev | Exact truth | What Jev said | Verdict |
-|---|---|---|---|---|
-| **S2** (primary) | `category`, on 4 combinations whose P(billing) is 0.345 / 0.533 / 0.714 / 1.0 | those values | see table below; mean KL **3.66 nats**, median 3.20 | **Prediction falsified** (needed KL < 0.15) |
-| **S3** (primary) | `hidden_priority` as a choice question | prior; best achievable accuracy 0.40 | accuracy **0.265** (95% CI 0.209–0.330), mean confidence **0.672** | **Confirmed**: overconfident on an unanswerable question |
-| S1 | `category`, resolvable items (top posterior ≥ 0.97) | near one-hot | accuracy 0.91 (CI 0.862–0.942), mean confidence 0.943, ECE 0.061 | Confirmed: good on easy items |
-| S4 | `hidden_priority` "expedite?" asked 3 ways (noul / choice / score) | P = 0.30 for all three | 0.288 / 0.366 / 0.363 on average; per item, noul differs from choice by 0.167 on average | Confirmed: framings disagree |
-| S5 | does `confidence` add anything beyond max(probabilities)? | — | correlation 0.9998; AURC 0.1339 vs 0.1341 | Confirmed: `confidence` ≈ max probability |
-| S6 | same email, stated spam base rate changed from 10% to 60% | Bayes-correct shift in P(spam): +0.568 | shifted in the right direction on 200/200 items, but by only +0.389 on average | Confirmed: underweights stated priors |
+then averaged over items (the results report both the mean and the
+median). In words: for each label, how much less probability the model
+gave it than it deserved, measured on a log scale and weighted by how
+likely that label really is. Some properties worth having in your head:
 
-**S2 in detail.** This is the result that needs an exact, adjustable
-posterior to see at all. For each combination, 50 items, comparing
-Jev's average reported P(billing) against the truth:
+- It's 0 exactly when the two distributions match, and positive
+  otherwise. Lower is better. It's never negative.
+- It punishes *confidently* wrong numbers much more than mildly wrong
+  ones: the log term blows up as the model's probability for a label that
+  really can happen approaches 0.
+- It's not symmetric: it's measured from the truth's point of view, so
+  only labels that can really happen contribute.
 
-| True P(billing) | Jev's mean reported P(billing) | Direction |
+**Units: nats.** KL is measured in *nats* when it uses the natural log
+($\ln$), as here, and in *bits* when it uses $\log_2$. It's the same
+quantity in different units: 1 nat ≈ 1.44 bits. The number itself
+has a concrete meaning — the average extra "surprise" you'd experience
+if you believed the model's numbers and then watched the truth play out —
+but it's easier to get a feel for by example. For a yes/no question whose
+true probability is 0.714 (the `strong_lean` item from Part 1, collapsed
+to "billing or not"):
+
+| Model reports | KL (nats) | Roughly |
 |---|---|---|
-| 0.345 | 0.011 (18 of 50 exactly 0) | far too low |
-| 0.533 | 0.307 | too low |
-| 0.714 | **0.997** | far too high |
-| 1.000 | 1.000 | correct (trivially) |
+| 0.70 | 0.0005 | essentially right |
+| 0.60 | 0.028 | a bit timid |
+| 0.50 | 0.095 | "no idea" |
+| 0.90 | 0.135 | overconfident |
+| 0.95 | 0.295 | quite overconfident |
+| 0.99 | 0.726 | near-certain, wrongly |
+| 0.997 | 1.065 | effectively certain |
+| 0.011 | 2.625 | confidently the opposite |
 
-Jev doesn't report the intermediate value. It pushes it toward whichever
-extreme is nearer, with the switch from too-low to too-high somewhere
-between true P = 0.53 and 0.71 (4 levels × 50 items locate a range, not
-an exact switch point). This "extremizing" is the pattern the first run
-*couldn't* show: with no combination between 0.37 and 1.0 available, only
-the too-low half was visible. Adding `strong_lean` / `mixed_lean` didn't
-just add data points; it revealed errors in the opposite direction that
-the narrower table couldn't reach.
+For comparison, a true probability of 0.345 reported as 0.011 costs 0.919
+nats. The four-label KL used in the results is the same formula summed
+over four labels instead of two.
 
-**S3 in detail.** On `hidden_priority`, the text contains no information
-about the answer, by construction (Part 1). The best any reader can do is
-report the prior and guess `low`, which is right 40% of the time. Jev did
-worse than that (26.5%, with the entire confidence interval below 0.40)
-while reporting 67% confidence. That's an overconfidence gap of +0.27 on a
-question it cannot, even in principle, answer from the text. This
-replicates the independently published result (44.7% accuracy, 0.74
-confidence) on a separately built, provably unanswerable item with a
-different prior.
+**What a reported 0 costs.** If the model says exactly 0 for a label that
+really has some probability, the log term is infinite. The code avoids
+this by treating any reported probability below $10^{-12}$ as $10^{-12}$
+(`metrics.kl_divergence`). That's a very harsh floor: each such label costs
+$p_{\text{true}}(y)\,\bigl(27.6 + \ln p_{\text{true}}(y)\bigr)$ nats — roughly $25 \times p_{\text{true}}(y)$ — so a label with true
+probability 0.067 that the model calls 0 adds 1.7 nats on its own. This
+matters for Jev, which reports probabilities rounded to two decimals, so
+its "0" really means "below 0.005." Where this changes a number, the
+results report both the pre-registered computation (floor $10^{-12}$) and
+a **rounding-aware** version: each of Jev's probabilities is raised to at
+least 0.005, the vector is rescaled to sum to 1, and then KL is computed.
+The toy model's softmax outputs are never exactly 0, so the issue doesn't
+arise there.
 
-### Reading the two together
+(`metrics.mean_posterior_divergence`; theory in `docs/explainers.md`,
+"KL divergence and posterior divergence.")
 
-The toy model, trained with soft targets on this world, reports the prior
-for `hidden_priority` almost exactly; Jev reports 67% confidence. So that
-failure isn't inevitable for a one-pass encoder with typed heads. With
-clean training, a model this shape handles an unanswerable question
-correctly. **This is not a like-for-like comparison, though.** The toy
-model was trained on this exact synthetic world, and Jev never saw it.
-The fair conclusion is "Jev's behavior here isn't forced by its
-architecture," not "Jev was trained with hard labels." The toy results
-support soft-target training as *one* mechanism that produces good
-calibration. They don't identify what Jev's training actually did.
+### Confidence-based metrics: ECE and the overconfidence gap
 
-Similarly, the toy model's KL numbers (≈ 0.0002–0.009) and Jev's S2 KL
-(3.66) are on the same scale but not comparable as a score: one model is
-in-distribution and the other is being tested cold. What *is* comparable
-is the shape. Both of the toy models, trained in-distribution, report
-intermediate probabilities as intermediate. Jev pushes them toward the
-extremes.
+These only use the model's confidence $\hat p_i$ and whether it was right,
+$o_i$. They're the standard calibration metrics when no exact answer key
+exists, so they're included for comparability with other work.
+
+**Expected calibration error (ECE).** Group items into $M$ bins by
+confidence; in each bin $m$ (with $n_m$ items), compare the average
+confidence $\bar p_m$ with the fraction actually correct $\bar o_m$:
+
+$$
+\text{ECE} = \sum_{m=1}^{M} \frac{n_m}{N} \bigl|\, \bar p_m - \bar o_m \,\bigr|
+$$
+
+Worked example: 100 items all at confidence 0.9, of which 80 are correct,
+gives ECE = $|0.9 - 0.8| = 0.10$ — "10 points overconfident." The code uses
+$M = 15$ bins of equal width on $[0, 1]$ by default. ECE's value depends on
+the binning choice (the reliability-diagram PNGs use 10 bins holding equal
+numbers of items and report different values for the same model), and it
+only checks the top pick's confidence against sampled labels. Posterior KL
+has neither weakness, so where the two disagree, trust KL.
+(`metrics.expected_calibration_error`; `docs/explainers.md`, "Expected
+Calibration Error (ECE) and its finite-sample bias.")
+
+**Overconfidence gap** (used in S3). On a question where the best possible
+accuracy is known, compare the model's average confidence with it:
+
+$$
+\text{overconfidence gap} = \frac{1}{N}\sum_{i=1}^{N} \hat p_i \;-\; \bigl(1 - \text{Bayes error rate}\bigr)
+$$
+
+An honest model on `hidden_priority` would report confidence ≈ 0.40 (the
+prior's largest value), since that is how often its best guess can be
+right. Gap 0 is honest; positive is overconfident.
+
+### Ranking: the risk–coverage curve and AURC
+
+A different question from calibration: are the model's *more* confident
+answers actually the *more* likely to be right? Sort items from most to
+least confident. For each $k = 1, \dots, N$, keep only the top $k$ and
+measure the error rate among them:
+
+$$
+\text{coverage}_k = \frac{k}{N}, \qquad \text{risk}_k = \frac{1}{k} \sum_{j=1}^{k} \bigl(1 - o_{(j)}\bigr)
+$$
+
+where $o_{(j)}$ is the correctness of the $j$-th most confident item. **AURC**
+is the area under the curve of risk against coverage (trapezoid rule). It's
+low when errors are concentrated among the least confident items. Lower is
+better.
+
+AURC only depends on the *order* of the confidences, not their values:
+squaring every confidence leaves AURC unchanged but wrecks calibration.
+That's exactly why it's useful here. It separates "ranks items well" from
+"reports the right numbers." (`metrics.risk_coverage_curve`,
+`metrics.area_under_risk_coverage`; `docs/explainers.md`, "Selective
+prediction: risk–coverage and AURC.")
+
+### The two halves of "good probabilities": reliability and resolution
+
+A standard way to state the distinction the last two sections draw is the
+Brier score and its decomposition. The Brier score is the average squared
+gap between confidence and outcome, and, grouped into the same bins as ECE,
+it splits into three parts:
+
+$$
+\text{Brier} = \frac{1}{N}\sum_{i=1}^{N} (\hat p_i - o_i)^2 \;\approx\;
+\underbrace{\frac{1}{N}\sum_m n_m(\bar p_m - \bar o_m)^2}_{\text{reliability}}
+\;-\;
+\underbrace{\frac{1}{N}\sum_m n_m(\bar o_m - \bar o)^2}_{\text{resolution}}
+\;+\;
+\underbrace{\bar o(1 - \bar o)}_{\text{uncertainty}}
+$$
+
+**Reliability** is the calibration error (lower is better). **Resolution**
+is how well the confidences separate right answers from wrong ones (higher
+is better); it's the quantity AURC tracks. **Uncertainty** is how hard the
+set is, fixed regardless of the model. A model can be strong on one half and
+weak on the other. The toy experiment's results use this vocabulary, with
+posterior KL standing in for reliability and AURC for resolution.
+(`metrics.brier_decomposition`; `docs/explainers.md`, "The Murphy / Brier
+decomposition.")
+
+### Quantities specific to one suite
+
+**S2 per-level comparison.** Besides mean KL over the whole sweep, S2 is
+reported per target level: the average of Jev's reported
+$p_{\text{model}}(\text{billing})$ over the 50 items at that level, next
+to the exact $p_{\text{true}}(\text{billing})$ for that level's combination.
+
+**S4 — P(expedite) three ways.** "Expedite" means high or critical
+priority. Its true probability is the same for every item, since
+`hidden_priority` has no evidence in the text:
+$0.2 + 0.1 = 0.30$ from the prior. Jev is asked three differently typed
+questions about it, and each answer is converted to the same quantity:
+
+$$
+p^{\text{noul}}_i = \text{Jev's yes/no probability}, \qquad
+p^{\text{choice}}_i = p^{\text{choice}}_i(\text{high}) + p^{\text{choice}}_i(\text{critical}), \qquad
+p^{\text{score}}_i = p^{\text{score}}_i(\text{high}) + p^{\text{score}}_i(\text{critical})
+$$
+
+Reported: the mean of each over items, and the **pairwise disagreement**,
+e.g. $\frac{1}{N}\sum_i \bigl|p^{\text{noul}}_i - p^{\text{choice}}_i\bigr|$,
+which measures how far apart the framings are *on the same email*.
+
+**S5 — does `confidence` add anything?** The Pearson correlation between
+Jev's `confidence` and its highest probability, across the 200 items, and
+the AURC computed once ranking by each. Correlation near 1 and equal AURCs
+mean the field is a restatement of the probability, not a separate signal.
+
+**S6 — reacting to a stated base rate.** The same email is sent twice, with
+the instruction prefixed by "only about 10% of tickets … are spam" or
+"about 60% … are spam." The correct response follows from Part 1's rule
+with the stated rate as the prior $\pi$:
+
+$$
+P_{\pi}(\text{spam} \mid \text{email}) = \frac{\pi(\text{spam}) \prod_{s} P(r_s \mid \text{spam})}{\sum_{y} \pi(y) \prod_{s} P(r_s \mid y)}
+$$
+
+$$
+\text{Bayes-correct shift} = P_{\pi_{60\%}}(\text{spam} \mid \text{email}) - P_{\pi_{10\%}}(\text{spam} \mid \text{email}), \qquad
+\text{observed shift} = p^{60\%}_{\text{model}}(\text{spam}) - p^{10\%}_{\text{model}}(\text{spam})
+$$
+
+The instruction states only the spam rate, so the analysis has to split the
+rest among billing, technical and sales. The code uses
+$\{0.30, 0.30, 0.30\}$ and $\{0.15, 0.15, 0.10\}$. For the email S6 uses,
+this choice doesn't matter: its clues (`generic_greeting`,
+`no_domain_shown`, `curt`) are equally likely under all three non-spam
+labels, so any split gives the same answer, $0.818 - 0.250 = +0.568$.
+Reported: the mean observed and Bayes-correct shifts, and the fraction of
+emails where Jev moved in the right direction.
+
+### Recalibrating Jev: three ways to adjust its probabilities with your labels
+
+Each method learns a correction from $n$ labeled emails (Jev's reported
+distribution $p_i$ and the observed label $y_i$), then applies it to new
+emails. Jev's probabilities are first floored at 0.005 and rescaled to sum
+to 1, as in the rounding-aware KL, so that logarithms are finite.
+
+**Temperature scaling** (one parameter). Soften or sharpen every answer by
+the same amount:
+
+$$
+q(y) = \frac{\exp\bigl(\ln p(y) / T\bigr)}{\sum_{y'} \exp\bigl(\ln p(y') / T\bigr)},
+\qquad
+T = \arg\min_T \; -\frac{1}{n}\sum_{i=1}^{n} \ln q_i(y_i)
+$$
+
+$T > 1$ pulls answers toward uniform, fixing overconfidence. It never
+changes which label is on top, or the order of emails by confidence, so it
+can't change accuracy or AURC. (`metrics.fit_temperature_multiclass`.)
+
+**Isotonic regression, per label.** For each label $k$, learn a
+non-decreasing function $g_k$ mapping Jev's probability for $k$ to how often
+$k$ was actually the answer:
+
+$$
+g_k = \arg\min_{g \text{ non-decreasing}} \sum_{i=1}^{n} \bigl(g(p_i(k)) - \mathbb{1}[y_i = k]\bigr)^2,
+\qquad
+q(k) = \frac{\max\bigl(g_k(p(k)),\, 10^{-3}\bigr)}{\sum_{k'} \max\bigl(g_{k'}(p(k')),\, 10^{-3}\bigr)}
+$$
+
+Each $g_k$ preserves order on its own, but because the four are learned
+separately and then rescaled together, the top label *can* change. For
+example, if "technical at 0.66" historically turned out to be technical
+only 40% of the time, it gets pulled down. (scikit-learn
+`IsotonicRegression`.)
+
+**Logistic regression on Jev's log-probabilities** (a small model stacked
+on Jev). Treat Jev's four log-probabilities as input features:
+
+$$
+q(y) = \frac{\exp\bigl(w_y^{\top} \ln p + b_y\bigr)}{\sum_{y'} \exp\bigl(w_{y'}^{\top} \ln p + b_{y'}\bigr)}
+$$
+
+with weights $w_y$ and offsets $b_y$ fit by L2-regularized log loss
+(scikit-learn `LogisticRegression`, $C = 1$). This is the most flexible of
+the three: it can learn cross-label patterns such as "when Jev splits
+between technical and sales, the answer is usually sales," and it can
+re-weight the base rates entirely. It's still limited to what Jev's four
+numbers contain; it never sees the email.
+
+### Toy-experiment summaries
+
+Each toy-model number is computed once per training seed, then reported as
+the mean ± sample standard deviation across the three seeds. A small
+standard deviation means the result isn't a fluke of one training run.
+Soft-vs-hard comparisons of KL are reported as a ratio, hard ÷ soft ("how
+many times further from the truth").
+
+### How a suite passes or fails: pre-registration
+
+Before the first live call to Jev, each suite's **prediction** and a
+**falsification criterion** ("we were wrong if…") were written into the
+`HYPOTHESES` table in `jev/probe/suites.py`. That's pre-registration. Its
+purpose is to rule out deciding after seeing the data what would have
+counted as interesting. A result is reported against what was written
+down, even when that turns out to be awkward.
+
+Two designations, also fixed in advance:
+
+- **Primary** (S2, S3): the claims the project stands on.
+- **Exploratory** (S1, S4, S5, S6): worth reporting, but run alongside
+  several others, so any single one could come out striking by chance. Read
+  them as leads, not conclusions.
+
+The thresholds are judgment calls. Nothing in the repo derives them; what
+makes them useful is only that they were fixed beforehand. Translated into
+plain terms:
+
+| Suite | Prediction | Falsified if | In plain terms |
+|---|---|---|---|
+| S1 | accuracy and mean confidence both > 0.90 | either < 0.85 | Between 0.85 and 0.90 is "neither." |
+| S2 | mean posterior KL < 0.15 nats | mean KL > 0.3, or every level's error in the same direction | 0.15 nats ≈ reporting 0.91 (or 0.44) when the truth is 0.714; 0.3 ≈ reporting 0.95 (or 0.33). The prediction's wording ("within 0.15 of 0.7") describes the 0.7 level, but the KL threshold is applied to the whole four-level sweep. |
+| S3 | accuracy ≤ 0.40 *and* mean confidence clearly above 0.40 | mean confidence within 0.05 of 0.40 | Predicts Jev is overconfident on an unanswerable question. |
+| S4 | the three framings disagree by > 0.1 | all three within 0.05 of each other and of 0.30 | |
+| S5 | `confidence` has no meaningful AURC advantage, and is highly correlated with max probability | clearly lower AURC, or weak correlation | "Meaningfully," "clearly" and "weak" were not given numbers — a gap in the pre-registration. |
+| S6 | observed shift < Bayes-correct shift | observed within 0.1 of Bayes-correct | Predicts Jev under-reacts to a stated base rate. |
+
+A result between the prediction and the falsification line counts as
+inconclusive, not as a pass.
+
+For the full record, the S2 suite was run twice. After the first run, a
+check of which P(billing) values the tables could produce at all showed a
+gap between 0.37 and 1.0, so the sweep couldn't test the 0.5 and 0.7 levels
+it was designed for. `mixed_lean` and `strong_lean` were added to fill it,
+and the whole probe was re-run. The thresholds weren't changed. The first
+run is archived in `outputs/probe_results_run1_20260925.json`.
 
 ---
 
@@ -796,6 +1138,10 @@ uncertainty story, not report numbers for it — there aren't any.
 
 ---
 
+That completes the setup. The results, measured with exactly the
+definitions in Part 3, are in
+[`RESULTS_AND_DISCUSSION.md`](RESULTS_AND_DISCUSSION.md).
+
 ## Where to look in the code
 
 | What | File |
@@ -808,5 +1154,6 @@ uncertainty story, not report numbers for it — there aren't any.
 | Soft vs. hard loss, training loop | `jev/toy/train.py` |
 | Item → tokenized tensors + both targets | `jev/toy/data.py` |
 | The real soft-vs-hard experiment | `scripts/run_toy_experiment.py` |
+| Jev vs. recalibrated Jev vs. own model, on the same emails | `scripts/run_head_to_head.py` |
 | Jev API client (live/replay/fixtures) | `jev/probe/client.py` |
 | The six probe suites, S1–S6 | `jev/probe/suites.py` |
