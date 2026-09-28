@@ -1,6 +1,7 @@
 # diy-jev
 
-Companion repo for the blog post **"DIY Jev"** (link to be added on publication).
+Companion repo for the blog post
+[**"DIY Jev"**](https://www.steveklosterman.com/diy-jev/).
 The post is the readable story; this repo has the full details: code, data,
 methods, and every number.
 
