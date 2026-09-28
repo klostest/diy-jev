@@ -25,3 +25,6 @@ outputs/head_to_head/*
 .env
 .idea/
 
+
+# Blog draft: lives on the blog, not in this repo
+diy_jev.md
