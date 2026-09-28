@@ -172,6 +172,45 @@ def draw(records, by_wording: bool, path: Path, blog: bool = False, header: bool
     print(f"saved {path}")
 
 
+def draw_teaser(records, path: Path):
+    """Eye-catching crop for a blog's front page: the upper-right part of the
+    by-wording figure, with no text at all (no titles, labels, tick numbers,
+    legend, notes or average bars). Not meant to be read on its own."""
+    levels = sorted({round(r["achieved_p"], 3) for r in records})
+    rng = np.random.default_rng(0)
+    fig, ax = plt.subplots(figsize=(8, 4.5), dpi=200)  # 16:9
+    fig.patch.set_facecolor(SURFACE)
+    ax.set_facecolor(SURFACE)
+    ax.plot([0, 1.1], [0, 1.1], color=REF, linewidth=2, linestyle=(0, (5, 4)), zorder=1)
+    for lv in levels:
+        rs = [r for r in records if round(r["achieved_p"], 3) == lv]
+        v = np.array([r["answer"]["probabilities"].get("billing", 0.0) for r in rs])
+        x = lv + rng.uniform(-0.035, 0.035, size=len(v))
+        if lv == MIXED_LEVEL:
+            idx = np.array([_wording_index(r["text"]) for r in rs])
+            order = sorted(set(idx), key=lambda k: v[idx == k].mean())
+            for color, k in zip(WORDING_COLORS, order):
+                m = idx == k
+                ax.scatter(x[m], v[m], s=90, color=color, alpha=0.85, edgecolor=SURFACE,
+                           linewidth=1, zorder=3)
+        else:
+            ax.scatter(x, v, s=90, color=TEXT_SECONDARY, alpha=0.75, edgecolor=SURFACE, linewidth=1, zorder=3)
+        ax.plot([lv], [lv], marker="D", markersize=10, color=SURFACE, markeredgecolor=TEXT_PRIMARY,
+                markeredgewidth=2, zorder=5)
+    ax.set_xlim(0.45, 1.06)
+    ax.set_ylim(0.03, 1.09)
+    ax.grid(True, color=GRID, linewidth=1)
+    ax.set_axisbelow(True)
+    ax.tick_params(length=0, labelbottom=False, labelleft=False)
+    for side in ["top", "right", "left", "bottom"]:
+        ax.spines[side].set_visible(False)
+    fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, facecolor=SURFACE)
+    plt.close(fig)
+    print(f"saved {path}")
+
+
 def main():
     records = json.load(open(RESULTS))["S2"]["records"]
     for lv in sorted({round(r["achieved_p"], 3) for r in records}):
@@ -184,6 +223,7 @@ def main():
     draw(records, by_wording=False, path=OUT_DIR / "s2_calibration_blog.png", blog=True)
     # Blog version of the by-wording figure: same content, no title/subtitle (the post captions it).
     draw(records, by_wording=True, path=OUT_DIR / "s2_calibration_by_wording_blog.png", header=False)
+    draw_teaser(records, OUT_DIR / "s2_teaser.png")
 
 
 if __name__ == "__main__":
