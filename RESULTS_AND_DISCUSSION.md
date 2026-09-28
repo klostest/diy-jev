@@ -22,12 +22,13 @@ test in S1–S6):
    incorrectly, though it might be tied to a feature not working" got
    P(billing) ≥ 0.99 on all 50 such emails. Half of all S2 answers put 95%
    or more on a single label.
-3. **Jev's `confidence` field is its top probability, rescaled** (S5). For
-   `choice` answers, confidence = (top − 1/K) / (1 − 1/K) with K options
-   (checked on 16,283 answers with 2–6 options), so a uniform guess reads 0. It adds no information, and it
-   isn't a probability: a confidence of 0.54 means a top probability of
-   0.655.
-4. **Jev gives no sign when a question can't be answered from the text**
+3. **Jev's `confidence` field is its top probability, rescaled** (S5).
+   TypeSafe's docs say it's computed from the probabilities; we checked
+   that for `choice` answers it's exactly (top − 1/K) / (1 − 1/K) with K
+   options (16,283 answers, 2–6 options), so a uniform guess reads 0. It
+   adds no information, and it isn't a probability: a confidence of 0.54
+   means a top probability of 0.655.
+4. *(Deprecated; see S3.)* **Jev gives no sign when a question can't be answered from the text**
    (S3). Asked a priority question whose answer, in this synthetic world,
    has nothing to do with the email, it answered from the email's urgency
    wording with a median top probability of 0.76, and was right less often
@@ -216,6 +217,15 @@ showed errors in both.
 
 ### S3 (primary): does Jev admit when it can't know?
 
+> **Deprecated.** This suite's premise doesn't hold up: priority is drawn
+> independently of the text, but it shares its labels with urgency, and
+> the question gives Jev no priority policy, so reading urgent wording as
+> high priority is reasonable rather than a calibration failure. The
+> results below test our hidden rule more than Jev, and are kept only as a
+> record. (A post-hoc follow-up that told Jev the policy isn't visible,
+> `scripts/run_s3_policy_gap.py`, found it hedged somewhat but kept
+> reading urgency wording.) S4's consistency result is unaffected.
+
 **The test.** Ordinary emails, with Jev asked "What priority level should
 this ticket be assigned?" In this world, priority is drawn by its own coin
 flip and never affects the text (setup, Part 1), so the exact answer for
@@ -339,20 +349,28 @@ depend on the question format, not only on the email.
 
 ### S5 (exploratory): what is the `confidence` field?
 
-Jev returns a `confidence` alongside its probabilities, and TypeSafe's
-documentation doesn't say what it measures separately. Across 200 emails
+Jev returns a `confidence` alongside its probabilities. The pre-registered
+question was whether it adds anything beyond them. Across 200 emails
 (half easy, half ambiguous), its correlation with Jev's own highest
 probability is **0.9998**. Ranking emails by either gives the same AURC
 (0.1339 vs 0.1341). **The prediction is confirmed**, and this holds
 regardless of our world: `confidence` carries no information that the
 probabilities don't already contain.
 
-**It's a formula, not just a correlation.** For `choice` questions,
+**It's a formula, and TypeSafe's docs say so.** The docs' confidence page
+(docs.typesafe.ai/confidence, checked 2026-09-28) says `confidence` "is a
+statistic computed from the probability distribution the answer already
+gives you", and shows (3 × largest probability − 1) / 2 as what "this demo
+uses to approximate confidence for three options". It gives no general
+formula and nothing for `score` questions. The general form for `choice`
+questions is
 
 > confidence = (top probability − 1/K) / (1 − 1/K), with K answer options
 
-With four options, a flat 25/25/25/25 answer gets confidence 0 and
-certainty gets 1. `scripts/check_confidence_formula.py` tests this on
+which is the docs' formula when K = 3. With four options, a flat
+25/25/25/25 answer gets confidence 0 and certainty gets 1. What this
+project adds is checking that the real API follows it exactly, for any
+number of options. `scripts/check_confidence_formula.py` tests this on
 every `choice` answer Jev has returned in this project, plus 100 new
 emails asked 2-, 3-, 5- and 6-option versions of the category question
 (all four S1–S6 questions have 4 options, which can't test the 1/K part):
@@ -395,16 +413,21 @@ Consequences:
   means a top probability of 0.655, not a 54% chance of being right. A user
   who reads it as a probability will under-read what Jev is claiming,
   especially in the middle of the range.
-- **It's not a pointless design, just an unexplained one.** Measuring
-  "distance from chance" puts questions with different numbers of options
-  on one scale: 0.5 means halfway from a random guess to certainty whether
-  there are 2 options or 6. The problems are the name, a scale that looks
-  like a probability, and documentation that doesn't say it's derived
-  from the top probability.
+- **It's a reasonable design, but it sits awkwardly with the pitch.**
+  Measuring "distance from chance" puts questions with different numbers
+  of options on one scale: 0.5 means halfway from a random guess to
+  certainty whether there are 2 options or 6. The docs are upfront that
+  it's computed from the probabilities. But TypeSafe's launch post
+  describes Jev as "Calibrated: higher confidence means higher accuracy",
+  and the docs suggest gating actions on confidence thresholds. Since
+  confidence is just the top probability re-expressed, those thresholds are
+  thresholds on the top probability, and they're only as good as the
+  probabilities' calibration, which is what S2 found lacking.
 
 Limits: this covers `choice` questions only. `score` questions report a
-`confidence` too, but none of these formulas fits it, so what it measures
-there is undetermined. Yes/no (`noul`) answers have no confidence field.
+`confidence` too, but none of these formulas fits it, and the docs don't
+say how it's computed, so what it measures there is undetermined. Yes/no
+(`noul`) answers have no confidence field, as the docs also state.
 All of this is inferred from Jev's outputs, not from its code. It's a
 precise description of what Jev returns, not a statement about how it's
 implemented. `outputs/figures/s5_confidence.png` plots confidence against
@@ -686,6 +709,11 @@ of what a support email usually is, and your labels tell it what *yours*
 usually are.
 
 ### The priority question (unanswerable from the text)
+
+> **Deprecated** for the same reason as S3 (Part A): priority is unrelated
+> to the text only by our hidden rule, which Jev had no way to know. Kept
+> as a record; it does show that recalibration can learn a rule like that
+> from a few hundred labels.
 
 | Approach | Labeled emails used | Accuracy | Posterior KL (nats) | Mean top probability |
 |---|---|---|---|---|

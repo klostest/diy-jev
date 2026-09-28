@@ -1,0 +1,100 @@
+{
+  "policy_sentence": "Context: priority is set by our team's internal account policy, which is not visible in this email. ",
+  "n": 200,
+  "original": {
+    "accuracy": 0.265,
+    "accuracy_ci": [
+      0.20868060011609973,
+      0.33017702266551113
+    ],
+    "mean_confidence": 0.67195,
+    "median_confidence": 0.675,
+    "frac_confidence_ge_0.9": 0.275,
+    "overconfidence_gap": 0.27195,
+    "mean_probabilities": {
+      "low": 0.421,
+      "medium": 0.214,
+      "high": 0.295,
+      "critical": 0.07
+    },
+    "choice_counts": {
+      "low": 88,
+      "medium": 40,
+      "high": 60,
+      "critical": 12
+    },
+    "by_urgency_phrase": {
+      "none": {
+        "n": 70,
+        "mean_p_high_or_critical": 0.26357142857142857,
+        "accuracy": 0.34285714285714286
+      },
+      "mild": {
+        "n": 60,
+        "mean_p_high_or_critical": 0.10766666666666666,
+        "accuracy": 0.26666666666666666
+      },
+      "strong": {
+        "n": 52,
+        "mean_p_high_or_critical": 0.658846153846154,
+        "accuracy": 0.17307692307692307
+      },
+      "extreme": {
+        "n": 18,
+        "mean_p_high_or_critical": 0.7699999999999999,
+        "accuracy": 0.2222222222222222
+      }
+    }
+  },
+  "policy_gap": {
+    "accuracy": 0.275,
+    "accuracy_ci": [
+      0.21779604313809775,
+      0.3406846595251467
+    ],
+    "mean_confidence": 0.5792499999999999,
+    "median_confidence": 0.595,
+    "frac_confidence_ge_0.9": 0.11,
+    "overconfidence_gap": 0.1792499999999999,
+    "mean_probabilities": {
+      "low": 0.425,
+      "medium": 0.301,
+      "high": 0.217,
+      "critical": 0.056
+    },
+    "choice_counts": {
+      "low": 89,
+      "medium": 56,
+      "high": 48,
+      "critical": 7
+    },
+    "by_urgency_phrase": {
+      "none": {
+        "n": 70,
+        "mean_p_high_or_critical": 0.21099999999999997,
+        "accuracy": 0.32857142857142857
+      },
+      "mild": {
+        "n": 60,
+        "mean_p_high_or_critical": 0.07899999999999999,
+        "accuracy": 0.3
+      },
+      "strong": {
+        "n": 52,
+        "mean_p_high_or_critical": 0.4940384615384615,
+        "accuracy": 0.21153846153846154
+      },
+      "extreme": {
+        "n": 18,
+        "mean_p_high_or_critical": 0.5283333333333333,
+        "accuracy": 0.16666666666666666
+      }
+    }
+  },
+  "paired": {
+    "frac_confidence_lower": 0.77,
+    "frac_confidence_higher": 0.205,
+    "mean_confidence_change": -0.09269999999999999,
+    "mean_change_p_high_or_critical": -0.0916
+  }
+}

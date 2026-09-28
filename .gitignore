@@ -2,7 +2,25 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-outputs/
+# outputs/: commit the results, figures and the Jev response cache (so every
+# analysis can be re-run without API access); ignore model weights, logs,
+# per-run predictions and superseded archives.
+outputs/*
+!outputs/figures/
+!outputs/probe_results.json
+!outputs/probe_results_run1_20260925.json
+!outputs/jev_cache.jsonl
+!outputs/toy_experiment/
+outputs/toy_experiment/*
+!outputs/toy_experiment/results.json
+!outputs/toy_experiment/summary.json
+!outputs/toy_experiment/*.png
+!outputs/head_to_head/
+outputs/head_to_head/*
+!outputs/head_to_head/results.json
+!outputs/head_to_head/jev_answers.jsonl
+!outputs/s3_policy_gap/
+!outputs/confidence_check/
 *.egg-info/
 .DS_Store
 .env

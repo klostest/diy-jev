@@ -49,7 +49,7 @@ This is the foundation the whole project rests on: it's *why* training a
 model to minimize cross-entropy or Brier score against a known-correct soft
 target is the right thing to do, rather than a heuristic. Log score and
 Brier score (below) are both proper; accuracy is not a scoring rule at all
-(it grades a decision, not a distribution). See [[dgp/generator.py]]'s exact
+(it grades a decision, not a distribution). See `dgp/generator.py`'s exact
 posteriors — they're targets a proper scoring rule can actually be graded
 against, not just estimated.
 
@@ -324,8 +324,8 @@ P(y \mid r_1,\dots,r_k) \; \propto \; \text{prior}(y) \prod_i P(r_i\mid y)
 $$
 with no estimation step anywhere — this single equation is the reason the
 whole project can train against a *true* target instead of a label scraped
-from the world. See `[[jev-project]]` and the plan's "where the training
-targets come from" section for the worked numeric example.
+from the world. See `EXPERIMENTAL_SETUP.md`, Part 1, for a fully worked
+numeric example.
 
 ### Bayes error rate
 
@@ -578,14 +578,14 @@ produces useful sentence-level representations — a smaller, cheaper student
 matching a bigger teacher's behavior (same core idea as the soft-target
 training above, one level up the stack, applied to the encoder itself
 rather than to our task heads). **ModernBERT** (the heavier alternative
-noted in the plan) modernizes the original BERT recipe: rotary position
+considered for this project) modernizes the original BERT recipe: rotary position
 embeddings (RoPE) instead of learned absolute positions (better length
 generalization), GeGLU activations in the MLP block, "unpadding" (packing
 variable-length sequences without wasting compute on padding tokens), and a
 much longer supported context. Either works as the encoder underneath
 `toy/model.py`; MiniLM trains faster and is the right default for
 iterating on an M1 Max, ModernBERT-base is the "if you want more headroom"
-option the plan names.
+option.
 
 ### This project's head design: learned queries, cross-attention, per-question isolation
 

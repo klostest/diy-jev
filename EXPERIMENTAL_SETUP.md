@@ -742,6 +742,14 @@ suite uses 200 items.
 | **S5** Confidence field | Does Jev's `confidence` carry information beyond max(probabilities)? | 100 resolvable (top posterior ≥ 0.9) + 100 ambiguous (P(billing) ≈ 0.6), so correctness varies | `category` (choice) | AURC of each signal; correlation between them | no meaningful AURC advantage; highly correlated | `confidence` clearly better AURC, or weakly correlated |
 | **S6** Prior sensitivity | Does Jev use a stated base rate correctly? | one ambiguous combination, P(spam) ≈ 0.5 under the true prior | `category` asked twice per email, with the instruction prefixed *"historically, only about 10% … are spam"* vs *"about 60% … are spam"* | Bayes-correct shift: same evidence re-run through the Part 1 rule with each stated prior swapped in | Jev shifts by *less* than the Bayes-correct amount | shift matches Bayes-correct within 0.1 |
 
+> **Deprecated: S3 and the `hidden_priority` concept.** Priority is drawn
+> independently of the text, but it shares its labels with urgency, and
+> the question gives Jev no priority policy, so treating urgent wording as
+> high priority is a reasonable reading, not a calibration failure. S3's
+> results therefore test our hidden rule more than Jev. The code, data and
+> results are kept as a record. S4 still stands: it uses the priority
+> questions only to check whether Jev's three answer formats agree.
+
 Two notes on reading the table. In S1 and S3, "accuracy" means agreement
 with the *sampled* hard label, so even a perfect reader is capped by the
 Bayes error rate. That is why S3's yardstick is 0.40, not 1.0. And S2 is
@@ -816,9 +824,9 @@ For item $i$ (out of $N$ items in a set):
 - $\hat p_i$ — the model's **confidence** in that pick: the highest
   probability it reports (for a yes/no answer, $\max(q, 1-q)$), for the
   toy model and Jev alike. Jev also returns a separate `confidence` field,
-  but it isn't a probability: it turns out to be the top probability
-  rescaled so that a uniform guess reads 0 (`RESULTS_AND_DISCUSSION.md`,
-  S5). So it can't be compared with an accuracy. The pre-registered S1 and
+  but it isn't a probability: TypeSafe's docs describe it as a statistic
+  computed from the probabilities, and it's the top probability rescaled
+  so that a uniform guess reads 0 (`RESULTS_AND_DISCUSSION.md`, S5). So it can't be compared with an accuracy. The pre-registered S1 and
   S3 computations in `probe/suites.py` did use that field; the results
   report those numbers and the corrected ones side by side.
 - $y_i$ — the item's hard label, sampled from $p_{\text{true},i}$ (Part 1).
@@ -1174,10 +1182,10 @@ model's softmax output, Jev's `choice`/`score`/`noul` answers — is being
 compared against this. This part is not a design sketch; it's the training
 loss and every metric in `eval/metrics.py`.
 
-### Epistemic via MC dropout: designed in the plan and explainer, not implemented in code
+### Epistemic via MC dropout: designed in the explainer, not implemented in code
 
 This is worth being precise about, because it was described in
-`docs/explainers.md` and the original plan as part of the approach, and
+`docs/explainers.md` and the original project plan (not included in this repo) as part of the approach, and
 it's easy to read that as "done." It wasn't built. Checked directly against
 the code, not from memory:
 

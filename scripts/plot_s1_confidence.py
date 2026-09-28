@@ -82,13 +82,18 @@ def _new_figure():
 
 
 def _finish(fig, ax_bottom, title, subtitle, path):
-    n_lines = subtitle.count("\n") + 1
+    """title=None gives the blog version: no title/subtitle (the post captions it)."""
     ax_bottom.set_xlim(0.25, 1.0)  # a four-label answer can't be below 0.25 confident
     ax_bottom.set_xlabel("Jev's reported confidence", color=TEXT_SECONDARY, fontsize=9)
-    fig.suptitle(title, x=0.02, ha="left", fontsize=11.5, color=TEXT_PRIMARY, y=0.99)
-    fig.text(0.02, 0.935, subtitle, fontsize=8.5, color=TEXT_SECONDARY, ha="left", va="top",
-             linespacing=1.4)
-    fig.subplots_adjust(top=0.81 - 0.045 * (n_lines - 1), left=0.09, right=0.98, bottom=0.12)
+    if title is None:
+        fig.set_size_inches(7.2, 4.0)
+        fig.subplots_adjust(top=0.93, left=0.09, right=0.98, bottom=0.13)
+    else:
+        n_lines = subtitle.count("\n") + 1
+        fig.suptitle(title, x=0.02, ha="left", fontsize=11.5, color=TEXT_PRIMARY, y=0.99)
+        fig.text(0.02, 0.935, subtitle, fontsize=8.5, color=TEXT_SECONDARY, ha="left", va="top",
+                 linespacing=1.4)
+        fig.subplots_adjust(top=0.81 - 0.045 * (n_lines - 1), left=0.09, right=0.98, bottom=0.12)
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, facecolor=SURFACE)
     plt.close(fig)
@@ -121,11 +126,13 @@ def plot_right_wrong(records):
             OUT_DIR / "s1_confidence.png")
 
 
-def plot_by_email_type(records):
+def plot_by_email_type(records, blog: bool = False):
     groups = [
         ("All other emails", [r for r in records if not _is_feature_request(r)]),
         ("Feature requests", [r for r in records if _is_feature_request(r)]),
     ]
+    if blog:
+        groups = groups[::-1]  # feature requests on top for the blog
     fig, axes = _new_figure()
     for (name, rs), ax in zip(groups, axes):
         right = _conf([r for r in rs if _is_right(r)])
@@ -143,10 +150,13 @@ def plot_by_email_type(records):
         ax.set_ylim(0, top)
         _median_marker(ax, _conf(rs), top)
         _style_axis(ax)
-    leg = axes[0].legend(loc="upper center", frameon=False, fontsize=8, handlelength=1.2,
-                         ncols=2, bbox_to_anchor=(0.5, 0.97))
+    leg = axes[0].legend(loc="upper right" if blog else "upper center", frameon=False, fontsize=8,
+                         handlelength=1.2, ncols=2, bbox_to_anchor=(1.0, 0.97) if blog else (0.5, 0.97))
     for t in leg.get_texts():
         t.set_color(TEXT_SECONDARY)
+    if blog:
+        _finish(fig, axes[1], None, None, OUT_DIR / "s1_confidence_by_type_blog.png")
+        return
     _finish(fig, axes[1],
             "Jev was unsure exactly where the label was ambiguous",
             "S1: 200 clear-cut emails. Our tables call feature requests sales; Jev leaned technical.\n"
@@ -173,6 +183,7 @@ def main():
                       f"{int((c >= 0.95).sum())} at >= 0.95")
     plot_right_wrong(records)
     plot_by_email_type(records)
+    plot_by_email_type(records, blog=True)
 
 
 if __name__ == "__main__":

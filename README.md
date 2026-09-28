@@ -1,35 +1,45 @@
-# Jev calibration testbed
+# diy-jev
+
+Companion repo for the blog post **"DIY Jev"** (link to be added on publication).
+The post is the readable story; this repo has the full details: code, data,
+methods, and every number.
 
 TypeSafe AI's **Jev** (released 2026-09-15) is a non-autoregressive "System
 One" model that returns typed decisions (`noul`/`choice`/`score`) with
 probabilities in a single parallel pass, pitched on calibration: *"higher
 confidence means higher accuracy."* TypeSafe's own published evals report
 accuracy, cost, and latency — no ECE, no reliability diagram, no Brier
-score. Independent tests (days old as of this writing) show real
-in-distribution calibration and real out-of-distribution degradation,
-including one item type that is provably unanswerable from its text where
-Jev was confident anyway.
+score.
 
 This repo builds **one synthetic data-generating process with an exact,
-closed-form posterior** (naive-Bayes emission tables, not estimated), used
-twice:
+closed-form posterior** (naive-Bayes emission tables, not estimated), and
+uses it three ways:
 
-1. **`toy/`** — a small encoder-based "System One" model, trained on an M1
-   Max, that reproduces Jev's architectural shape (one encoder pass,
-   parallel per-question heads) and the soft-target training bet that
-   plausibly explains Jev's own calibration story.
-2. **`probe/`** — six pre-registered test suites (S1-S6) against the real
+1. **`probe/`** — six pre-registered test suites (S1–S6) against the real
    Jev API, graded against the generator's *known true posterior* rather
-   than noisy observed labels — including items whose correct answer is
-   provably the prior. See "Prior art" below: several independent projects
-   test Jev against synthetic ground truth now; this one's specific edge is
-   a *tunable, exact* posterior plus a provably-unanswerable control, tested
-   against the real hosted API, which as of this writing nothing else combines.
+   than noisy observed labels.
+2. **`toy/`** — a small encoder-based model, trained on an M1 Max, with
+   Jev's architectural shape (one encoder pass, parallel per-question
+   heads), used for a soft-vs-hard-label training comparison.
+3. **`scripts/run_head_to_head.py`** — Jev as is, Jev recalibrated on your
+   own labels, and the toy model trained on your own (hard) labels, all on
+   the same 6,440 emails, with learning curves over the number of labels.
 
-Full rationale: [`/Users/steve/.claude/plans/hi-i-m-curious-about-cosmic-pelican.md`](file:///Users/steve/.claude/plans/hi-i-m-curious-about-cosmic-pelican.md).
-Math and transformer background: [`jev/docs/explainers.md`](jev/docs/explainers.md).
+> **Deprecated: the `hidden_priority` concept (suite S3, and the priority
+> parts of the head-to-head).** It was meant as a provably unanswerable
+> question: priority is drawn independently of the text. But it shares its
+> labels (low/medium/high/critical) with urgency, and the question we asked
+> Jev ("What priority level should this ticket be assigned?") gives no
+> policy, so treating urgent wording as high priority is a reasonable
+> reading, not a calibration failure. Those results test our hidden rule
+> more than Jev. The code and results are kept for the record; see
+> `RESULTS_AND_DISCUSSION.md`. The S4 consistency result still stands: it
+> uses priority questions, but only checks whether Jev's three answer
+> formats agree with each other, which doesn't depend on the hidden labels.
+
 How the pieces connect end to end, with a worked example: [`EXPERIMENTAL_SETUP.md`](EXPERIMENTAL_SETUP.md).
 What the experiments found, and what it does and doesn't say about Jev: [`RESULTS_AND_DISCUSSION.md`](RESULTS_AND_DISCUSSION.md).
+Math and transformer background: [`jev/docs/explainers.md`](jev/docs/explainers.md).
 
 ## Quick start
 
@@ -143,7 +153,7 @@ the results should be framed: as a sharper instrument on one specific,
 checkable axis (exact tunable posterior + provably-unanswerable control +
 the real API, together), not as the first calibration test of Jev.
 
-## Verification (see the plan for full ordering/rationale)
+## Verification
 
 1. Generator ground truth validated by Monte Carlo (`tests/test_generator.py`).
 2. Metric oracle/detector checks: a perfectly-calibrated source reads as
@@ -181,7 +191,7 @@ seen in training), `all-MiniLM-L6-v2` encoder, 3 epochs, identical
 architecture/optimizer/schedule between the two modes — only the training
 target differs (see `docs/explainers.md`, "soft targets vs. label
 smoothing"). **Trained across 3 seeds per mode (100/101/102), mean±std
-below** — the plan's own research-practices rule required this
+below** — the project's own research-practices rule required this
 ("report across ≥3 seeds for any training claim") and the original write-up
 only had one; every number here now has a standard deviation attached, and
 it's tight. (Numbers below post-date a fix to the `CATEGORY` slot
@@ -264,7 +274,7 @@ permuted labels, as it must.
 > not hold against Jev's own starting belief.
 
 `typesafe/jev-1.13-20260917`, via OpenRouter, n=200/suite. Organized by the
-plan's own pre-registered split: S2 and S3 are the primary endpoints; S1,
+project's pre-registered split: S2 and S3 are the primary endpoints; S1,
 S4, S5, S6 are exploratory. **Run twice** — an initial run, then a second
 after fixing a coverage gap in the `CATEGORY` slot vocabulary (see below);
 numbers here are the second, corrected run. The first run's raw output is
@@ -324,7 +334,8 @@ three framings, three different answers around a known target.
 
 **S5 (confidence vs. probability), exploratory:** correlation 0.9998 between
 `confidence` and max(`probabilities`); AURC essentially identical (0.1339 vs
-0.1341). For `choice` answers `confidence` is exactly
+0.1341). TypeSafe's docs (docs.typesafe.ai/confidence) say confidence is
+computed from the probability distribution; for `choice` answers it's exactly
 (top − 1/K) / (1 − 1/K), the top probability rescaled so a uniform guess
 reads 0 (16,283 recorded `choice` answers with 2–6 options, within about 0.02; see
 `scripts/check_confidence_formula.py`). So it's

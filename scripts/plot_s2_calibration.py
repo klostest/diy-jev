@@ -61,7 +61,8 @@ def _wording_index(text: str) -> int | None:
     return None
 
 
-def draw(records, by_wording: bool, path: Path):
+def draw(records, by_wording: bool, path: Path, blog: bool = False):
+    """blog=True: no title/subtitle and no in-plot phrase notes (the post captions it)."""
     levels = sorted({round(r["achieved_p"], 3) for r in records})
     by_level = {lv: [r for r in records if round(r["achieved_p"], 3) == lv] for lv in levels}
 
@@ -96,7 +97,7 @@ def draw(records, by_wording: bool, path: Path):
         ax.plot([lv - 0.05, lv + 0.05], [v.mean()] * 2, color=TEXT_PRIMARY, linewidth=2, zorder=4)
         ax.plot([lv], [lv], marker="D", markersize=5, color=SURFACE, markeredgecolor=TEXT_PRIMARY,
                 markeredgewidth=1.2, zorder=5)
-        note = LEVEL_NOTES.get(lv)
+        note = None if blog else LEVEL_NOTES.get(lv)
         if by_wording and lv == MIXED_LEVEL:
             note = None  # its wordings are named in the legend below the plot
         if by_wording and lv == 0.714:
@@ -149,10 +150,16 @@ def draw(records, by_wording: bool, path: Path):
         title = "Jev pushes in-between answers to 0 or 1"
         subtitle = ("S2: 50 emails at each of four exact values of P(billing). "
                     "Dots are spread sideways only to avoid overlap.")
-    fig.suptitle(title, x=0.02, ha="left", fontsize=11.5, color=TEXT_PRIMARY, y=0.985)
-    fig.text(0.02, 0.935, subtitle, fontsize=8.5, color=TEXT_SECONDARY, ha="left", va="top",
-             linespacing=1.4)
-    if by_wording:
+    if blog:
+        fig.set_size_inches(7.2, 5.0)
+        fig.subplots_adjust(top=0.97, left=0.10, right=0.98, bottom=0.11)
+    else:
+        fig.suptitle(title, x=0.02, ha="left", fontsize=11.5, color=TEXT_PRIMARY, y=0.985)
+        fig.text(0.02, 0.935, subtitle, fontsize=8.5, color=TEXT_SECONDARY, ha="left", va="top",
+                 linespacing=1.4)
+    if blog:
+        pass
+    elif by_wording:
         fig.set_size_inches(7.2, 6.6)
         fig.subplots_adjust(top=0.86, left=0.10, right=0.98, bottom=0.24)
     else:
@@ -173,6 +180,7 @@ def main():
               f"range {v.min():.2f}-{v.max():.2f}  at >=0.99: {(v >= 0.99).sum()}  at 0: {(v == 0).sum()}")
     draw(records, by_wording=False, path=OUT_DIR / "s2_calibration.png")
     draw(records, by_wording=True, path=OUT_DIR / "s2_calibration_by_wording.png")
+    draw(records, by_wording=False, path=OUT_DIR / "s2_calibration_blog.png", blog=True)
 
 
 if __name__ == "__main__":
