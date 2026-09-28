@@ -11,6 +11,7 @@ Stages (each resumable; run in order, `jev` and `toy` can run concurrently):
 
   uv run python scripts/run_head_to_head.py jev      # ask Jev about all 6,440 test emails (cached)
   uv run python scripts/run_head_to_head.py toy      # train hard-label toys on N labels (+ soft reference)
+  uv run python scripts/run_head_to_head.py jev_train  # ask Jev about all 23,560 training emails (cached)
   uv run python scripts/run_head_to_head.py analyze  # recalibrate Jev on N labels, score everything
 
 The `jev` stage needs JEV_API_KEY etc. in the environment (see probe/client.py);
@@ -39,6 +40,10 @@ N_CALIB_POOL = 2_000
 TOY_NS = [50, 200, 1_000, 5_000, None]   # None = every training email
 TOY_SEEDS = [100, 101, 102]
 CALIB_NS = [50, 200, 1_000, 2_000]
+# Equal-budget follow-up: recalibrate Jev on the SAME training-email subsets the own
+# model was trained on (same seeds, same sizes), so both sides get the same labels.
+TRAIN_CALIB_NS = TOY_NS
+JEV_WORKERS = 4
 CALIB_REPEATS = 3
 JEV_FLOOR = 0.005        # Jev rounds to 0.01, so a reported 0 means "below 0.005"
 PRIORITY_LABELS = URGENCY_LEVELS  # hidden_priority uses the same four level names
@@ -91,6 +96,55 @@ def stage_jev():
         for r in rows:
             f.write(json.dumps(r) + "\n")
     print(f"done: {len(rows)} answers, {n_live} new live calls, models seen: {sorted({r['model'] for r in rows})}")
+
+
+def stage_jev_train():
+    """Ask Jev about every training email, JEV_WORKERS requests at a time. Cache
+    writes happen only here in the main thread, so the cache file stays consistent."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from jev.probe.client import JevAPIError, LiveJevClient, ReplayJevClient
+    from jev.probe.suites import CATEGORY_QUESTION, HP_CHOICE_QUESTION
+
+    train_items, _, _, _ = load_split()
+    questions = {"category": CATEGORY_QUESTION, "priority": HP_CHOICE_QUESTION}
+    qjson = {k: q.to_json() for k, q in questions.items()}
+    replay, live = ReplayJevClient([CACHE]), None
+    answers, todo = {}, []
+    for i, item in enumerate(train_items):
+        try:
+            answers[i] = replay.ask(item.text, questions)
+        except JevAPIError:
+            todo.append(i)
+    print(f"{len(answers)} cached, {len(todo)} to ask", flush=True)
+
+    def ask(i):
+        for attempt in range(6):
+            try:
+                return i, live.ask(train_items[i].text, questions)
+            except Exception as e:  # transient network/API errors
+                if attempt == 5:
+                    raise
+                time.sleep(2 ** attempt)
+
+    if todo:
+        live = LiveJevClient()
+        t0 = time.time()
+        with ThreadPoolExecutor(JEV_WORKERS) as pool, open(CACHE, "a") as cache:
+            for n_done, fut in enumerate(as_completed(pool.submit(ask, i) for i in todo), 1):
+                i, resp = fut.result()
+                answers[i] = resp
+                cache.write(json.dumps({"state": train_items[i].text, "questions": qjson,
+                                        "response": resp.raw}) + "\n")
+                if n_done % 500 == 0:
+                    cache.flush()
+                    print(f"{n_done}/{len(todo)} ({(time.time() - t0) / 60:.1f} min)", flush=True)
+    with open(OUT_DIR / "jev_train_answers.jsonl", "w") as f:
+        for i in range(len(train_items)):
+            r = answers[i]
+            f.write(json.dumps({"idx": i, "model": r.model, "category": r.answers["category"],
+                                "priority": r.answers["priority"]}) + "\n")
+    print(f"done: {len(train_items)} answers; models seen: {sorted({answers[i].model for i in answers})}")
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +267,15 @@ def stage_analyze():
     jev_raw = {"category": _jev_matrix(rows, "category", CATEGORY_LABELS),
                "priority": _jev_matrix(rows, "priority", PRIORITY_LABELS)}
 
+    train_path = OUT_DIR / "jev_train_answers.jsonl"
+    train_rows = [json.loads(l) for l in open(train_path)] if train_path.exists() else None
+    if train_rows is not None:
+        assert len(train_rows) == len(train_items)
+        train_hard = {"category": np.array([CATEGORY_LABELS.index(it.labels["category"]) for it in train_items]),
+                      "priority": np.array([PRIORITY_LABELS.index(it.labels["hidden_priority"]) for it in train_items])}
+        train_jev = {"category": _floor_renorm(_jev_matrix(train_rows, "category", CATEGORY_LABELS), JEV_FLOOR),
+                     "priority": _floor_renorm(_jev_matrix(train_rows, "priority", PRIORITY_LABELS), JEV_FLOOR)}
+
     results = {"n_eval": int(len(eval_idx)), "n_calib_pool": int(len(calib_idx)),
                "models_seen": sorted({r["model"] for r in rows}), "category": {}, "priority": {}}
     for q in ["category", "priority"]:
@@ -230,6 +293,17 @@ def stage_analyze():
                     pred, _ = fn(jev[fit], H[fit], jev[E])
                     runs.append(_score(pred, T[E], H[E]))
                 R[f"jev_{name}_n{n}"] = _agg(runs)
+            if train_rows is not None:
+                # Same subsets as the own model: stage_toy draws rng(seed).permutation(...)[:n].
+                for n in TRAIN_CALIB_NS:
+                    n_total = n or len(train_items)
+                    seeds = TOY_SEEDS if n_total < len(train_items) else TOY_SEEDS[:1]
+                    runs = []
+                    for seed in seeds:
+                        fit = np.random.default_rng(seed).permutation(len(train_items))[:n_total]
+                        pred, _ = fn(train_jev[q][fit], train_hard[q][fit], jev[E])
+                        runs.append(_score(pred, T[E], H[E]))
+                    R[f"jev_{name}_train_n{n_total}"] = _agg(runs)
         for mode, ns in [("hard", TOY_NS), ("soft", [None])]:
             for n in ns:
                 n_total = n or len(train_items)
@@ -256,4 +330,4 @@ def stage_analyze():
 
 if __name__ == "__main__":
     stage = sys.argv[1] if len(sys.argv) > 1 else "analyze"
-    {"jev": stage_jev, "toy": stage_toy, "analyze": stage_analyze}[stage]()
+    {"jev": stage_jev, "jev_train": stage_jev_train, "toy": stage_toy, "analyze": stage_analyze}[stage]()

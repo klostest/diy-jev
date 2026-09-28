@@ -708,6 +708,38 @@ the business lesson: Jev's out-of-the-box probabilities reflect Jev's idea
 of what a support email usually is, and your labels tell it what *yours*
 usually are.
 
+### Equal label budgets: recalibrating Jev on the training emails
+
+The table above caps Jev's recalibration at the 2,000-email calibration pool
+while the own model gets up to 23,560 labels. To check that this isn't what
+decides the comparison, Jev was also asked about all 23,560 training emails
+(`run_head_to_head.py jev_train`), and each recalibrator was fitted on
+exactly the training subsets the own model used (same sizes, same seeds),
+then scored on the same 4,440 evaluation emails:
+
+| Jev + …, fitted on training emails | 1,000 labels: accuracy / KL | 5,000 | 23,560 |
+|---|---|---|---|
+| temperature scaling | 0.788 / 0.33 | 0.788 / 0.33 | 0.788 / 0.33 |
+| isotonic regression | 0.849 / 0.166 | 0.856 / 0.171 | 0.860 / 0.172 |
+| logistic regression | 0.842 / 0.172 | 0.840 / 0.175 | 0.841 / 0.174 |
+| *own model (same labels)* | *0.858 / 0.072* | *0.867 / 0.021* | *0.870 / 0.005* |
+
+More labels don't help, and calibration gets *worse* than with the small
+test-side pool (KL about 0.17 against 0.06), even worse than raw Jev for
+temperature scaling. The cause is distribution shift from the compositional
+split: the test emails use clue combinations that never appear in training,
+so the mix differs (billing 0.23 of training labels vs. 0.33 of evaluation
+labels; sales 0.27 vs. 0.19), and so does what Jev's answers mean. When Jev
+picks "sales" it's right 64% of the time on training emails but 92% on
+evaluation emails ("technical": 51% vs. 65%). A recalibrator learns
+P(label | Jev's probabilities) for the mix it's fitted on, and that doesn't
+transfer. The own model learns P(label | text), which does.
+
+So the original comparison wasn't rigged against Jev. Calibrating on
+emails from the same pool as the evaluation set was the *favorable*
+setting for Jev. The practical lesson is to recalibrate on data that
+matches deployment, and to recalibrate again when it drifts.
+
 ### The priority question (unanswerable from the text)
 
 > **Deprecated** for the same reason as S3 (Part A): priority is unrelated

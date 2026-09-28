@@ -776,6 +776,10 @@ by putting every option on the **same** emails.
   and priority (the `choice` version), worded exactly as in "How we talk to
   Jev." That's 6,440 live calls, all cached, all from
   `typesafe/jev-1.13-20260917`.
+- **Equal-budget follow-up.** Jev is also asked about all 23,560 training
+  emails (`jev_train` stage), and each recalibration method is fitted on
+  exactly the training subsets the own model used (same sizes and seeds),
+  so both sides get the same labels. Scored on the same evaluation set.
 - **Jev + your labels.** Three ways of adjusting Jev's probabilities (Part
   3, "Recalibrating Jev"), each fitted on 50, 200, 1,000 or 2,000 labeled
   emails from the calibration pool. Each size is repeated with 3 different

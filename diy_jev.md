@@ -24,6 +24,19 @@ Thanks,
 Emma
 ```
 
+Each piece of this email was drawn from a small table of options. The column headers below, and most of the entries, are variable names from the repo: a *concept* is a question we can ask about the email, a *slot* is one clue that bears on that concept, a *realization* is the value that clue took for this email, and the *phrase* is the wording that realization became.
+
+| Concept | Slot | Realization | Phrase in the email |
+|---|---|---|---|
+| `category` | `tone` | `polite` | "Thanks so much for your help." |
+| `category` | `complaint_phrase` | `strong_lean` | "I think I'm being charged incorrectly, … as expected" |
+| `category` | `sender_domain` | `generic_webmail` | "@yahoo.com" |
+| `urgency` | `exclaim_count` | `1` | the "!" ending the complaint sentence |
+| `urgency` | `intensity_marker` | `extreme` | "URGENT -- please treat as a priority." |
+| `is_business` | `signature_style` | `first_name_only` | "Thanks, Emma" (on two lines) |
+
+There's no need to follow every detail here; the point is to get a rough impression of how the emails map onto labels. The [repo](REPO_URL) has the full tables and a step-by-step walkthrough.
+
 Because we know exactly which ingredients went into this email, and how likely each ingredient is under each category, we can calculate its category probabilities exactly: 65% billing, 17% technical, 7% sales and 11% spam. Nobody labeled this email; the answer falls out of the arithmetic.
 
 Most emails are much more clear-cut than this one. In the 6,440 test emails used later on, 73% have one category at 97% probability or more; I'll call these *recoverable*. The rest are *ambiguous* to varying degrees: 8% have a leading category somewhere between 50% and 97%, and 19% have no category above 50%. Those last ones are all emails with no complaint sentence at all, where only weak clues like the sender's email domain remain. Because of the ambiguous emails, even a perfect model, one that knew every probability exactly, would only pick the right category about 87% of the time on this test set.
@@ -76,7 +89,7 @@ For 200 recoverable emails, Jev correctly classified all but 18. These 18 were e
 
 Jev's reported confidence in the 26 feature request emails is notable - they received confidence scores spread across 0.36-0.75, with a median of 0.6, while every other email got at least 0.92 (and all but one got 0.95 or more). So on the obvious questions, when Jev was struggling, it represented that through lower confidence.
 
-![Jev's confidence on the 200 obvious emails: feature requests (top) spread between 0.36 and 0.75; all other emails near 1.0](/assets/images/diy-jev/s1_confidence_by_type_blog.png)
+![Jev's confidence on the 200 obvious emails: feature requests (top) spread between 0.36 and 0.75; all other emails near 1.0](outputs/figures/s1_confidence_by_type_blog.png)
 
 *Jev's confidence on the 200 obvious emails. Every feature request got a middling confidence, whether Jev's answer counted as right or wrong; every other email got a near-certain, correct answer. Note the two panels' different vertical scales.*
 
@@ -86,7 +99,7 @@ When I first heard that Jev was trained on synthetic data and produced calibrate
 
 For this probe I picked four combinations of ingredients whose true probability of billing is 0.345, 0.533, 0.714 and 1.0, and generated 50 emails for each, varying the wording, names and other details.
 
-![Jev's reported probability of billing against the true probability, 50 emails at each of four levels](/assets/images/diy-jev/s2_calibration_blog.png)
+![Jev's reported probability of billing against the true probability, 50 emails at each of four levels](outputs/figures/s2_calibration_blog.png)
 
 *Each dot is one email. A perfectly calibrated model would put every dot on the dashed diagonal; the diamonds mark the true answers and the black bars Jev's averages.*
 
@@ -98,7 +111,7 @@ TypeSafe's documentation describes the confidence score as "a statistic computed
 
 > confidence = (largest probability − 1/K) / (1 − 1/K), for a question with K options
 
-This is just the largest probability rescaled, so that a uniform guess across the options scores 0 and certainty scores 1. So the confidence score isn't a probability (a confidence of 0.54 on a four-option question means a largest probability of 0.655), and it carries no information that the probabilities don't already contain.
+This is just the largest probability rescaled to run from 0 to 1. On a four-option question, an answer that spreads its probability evenly (25% on each option, the least committed answer possible) gets a confidence of 0; an answer that puts 100% on one option gets 1; and an answer with 62.5% on its top option lands halfway, at 0.5. So the confidence score isn't a probability (a confidence of 0.54 on a four-option question means a largest probability of 0.655), and it carries no information that the probabilities don't already contain.
 
 That includes the feature-request emails in the first figure. Their confidence was lower simply because Jev split its probability between technical and sales, and the confidence score restates that. It's a handy summary of how spread out Jev's answer is, but it isn't an independent check on whether the answer is right. (Ordinal "score" questions also return a confidence, which follows some other rule we couldn't identify.)
 
@@ -111,25 +124,20 @@ On each of 200 emails, Jev got three questions about priority in a single reques
 - choice: "What priority level should this ticket be assigned?", with options low, medium, high and critical.
 - score: "Rate the priority level this ticket should be assigned", on the scale low → critical.
 
-Each converts to the same number, P(high or critical). For yes/no it's the "yes" probability; for choice and score it's the probability on high plus critical.
+Each converts to the same number, P(high or critical). For yes/no it's the "yes" probability; for choice and score it's the probability on high plus critical. The table shows that number averaged over the emails containing each urgency phrase, for each format:
 
-┌─────────────────────────────────────────────┬────────┬────────┬───────┐
-│               Urgency phrase                │ yes/no │ choice │ score │
-├─────────────────────────────────────────────┼────────┼────────┼───────┤
-│ none (70 emails)                            │ 0.24   │ 0.26   │ 0.29  │
-├─────────────────────────────────────────────┼────────┼────────┼───────┤
-│ "no particular rush" (60)                   │ 0.14   │ 0.11   │ 0.12  │
-├─────────────────────────────────────────────┼────────┼────────┼───────┤
-│ "this is fairly urgent" (52)                │ 0.46   │ 0.66   │ 0.63  │
-├─────────────────────────────────────────────┼────────┼────────┼───────┤
-│ "URGENT -- please treat as a priority" (18) │ 0.45   │ 0.76   │ 0.70  │
-└─────────────────────────────────────────────┴────────┴────────┴───────┘
+| Urgency phrase | yes/no | choice | score |
+|---|---|---|---|
+| none (70 emails) | 0.24 | 0.26 | 0.29 |
+| "no particular rush" (60) | 0.14 | 0.11 | 0.12 |
+| "this is fairly urgent" (52) | 0.46 | 0.66 | 0.63 |
+| "URGENT -- please treat as a priority" (18) | 0.45 | 0.76 | 0.70 |
 
 So Jev has some internal inconsistency. On calm emails the three formats agree closely, but on urgent-sounding ones the yes/no format is much more cautious than the other two. If you expedited every ticket scoring above 0.5, the decision would flip on 22 of the 200 emails depending only on which format you asked in. The starkest case was an email whose entire body read "URGENT -- please treat as a priority!!": 0.24 as a yes/no question, 0.75 as a multiple choice question, and 0.47 on the ordinal scale. That's three different answers from one reading of one email.
 
 This is actually a more complicated question to consider asking Jev than it may seem at first, which may help explain the disagreement. Here Jev is asked about prioritizing incoming messages. But no rules have been given to Jev for prioritization that the real-world team might use, like for example "billing requests go to the top of the stack." In this case Jev appears to interpret relative expressions of urgency or requests for prioritization in mostly reasonable ways, although in yes/no form it stops short of recommending expediting, on average, even for emails that say "URGENT" (0.45, against 0.66-0.76 in the other two formats). Adjusting the context provided to Jev, e.g. providing the prioritization rules the real-life team would use and grading Jev against those on test cases should underpin actual usage.
 
-We've now probed Jev against some very well-understood data, synthetic but generated to be semantically believable, that Jev had never seen, and found that Jev generally behaves intuitively. While we actually know the true recoverable class probabilities for the classification problems we are posing to Jev because we designed and controlled the data generating process, in the real world a practicing data scientist would more likely only have access to one label per sample: the observed outcome, whatever the underlying class probabilities are.
+We've now probed Jev against some very well-understood data, synthetic but generated to be semantically believable, that Jev had never seen, and found that Jev generally behaves intuitively. While we actually know the true recoverable class probabilities for the classification problems we are posing to Jev because we designed and controlled the data generating process, in the real world a practicing data scientist would more likely only have access to one label per sample: the observed outcome, whatever the underlying class probabilities are. We leverage this kind of information in the next section.
 
 # Part 2
 
@@ -177,7 +185,15 @@ $$
 z_c = \Big(\sum_{t} \alpha_t \, h_t W_V\Big) W_O
 $$
 
-Here the h's are the token vectors, q is the question's query, the W's are learned weight matrices, and the alphas are the relevance weights, which add up to 1. The model actually runs four of these attention "heads" side by side (details in the repo). A small output layer turns each question's summary into probabilities. Because every question has its own query, each learns to look at different words: after training, the urgency question's attention landed squarely on phrases like "URGENT" and on exclamation marks, the category question's on the complaint sentence, and the business question's on the sign-off. The encoder and everything after it are trained together.
+Here:
+
+- *t* indexes the token's position in the email (first token, second token, and so on), and h<sub>t</sub> is the encoder's vector for the token at position *t*.
+- *c* indexes the question (category, urgency or business), and q<sub>c</sub> is that question's learned query vector.
+- W<sub>Q</sub>, W<sub>K</sub> and W<sub>V</sub> are learned matrices that turn vectors into a *query*, *keys* and *values*, the three roles in attention. The query is what the question is looking for. Each token's key is what it offers to be matched against. Each token's value is the information it contributes if it's selected.
+- Multiplying the query by a key and dividing by the square root of the vectors' length *d* gives a relevance score for each token. The softmax turns the scores into weights α<sub>t</sub> that are positive and add up to 1.
+- The weighted sum of the values is the question's summary of the email, and W<sub>O</sub>, the *output* matrix, maps that summary into the form the next layer uses. The model actually runs four of these attention "heads" side by side, each free to look at different tokens, and W<sub>O</sub> also combines their four results into one (details in the repo).
+
+A small output layer turns each question's summary into probabilities. Because every question has its own query, each learns to look at different words: after training, the urgency question's attention landed squarely on phrases like "URGENT" and on exclamation marks, the category question's on the complaint sentence, and the business question's on the sign-off. The encoder and everything after it are trained together.
 
 I trained the model on hard labels only: one observed category per email, the way a business would have historical outcomes, not the exact probabilities we happen to know here. To see how much labeled data it takes, I trained it on 50, 200, 1,000, 5,000 and all 23,560 labeled training emails, three times each with different random subsets. Each run held back 20% of its labeled emails to decide when to stop training. The test emails were built from combinations of ingredients that never appeared in training. Each run took at most about five minutes on an M1 Max Mac; no GPU cluster required.
 
@@ -201,7 +217,9 @@ With a few hundred labels, calibrated Jev comes close to the best possible accur
 
 Training my own model from scratch lost to Jev at 200 labels, tied calibrated Jev at about 1,000, and from 5,000 labels on beat every version of Jev on accuracy and calibration, getting close to the best possible model. (With all the training data it edges slightly past the "best possible" accuracy; that's the luck of which labels happened to be drawn for this test set.) It also ranked its answers better: its confident answers were more reliably right than Jev's, even after calibration.
 
-These emails are short and templated, so a real business's messier text would need more labels than this. The pattern is the part I'd expect to carry over: with a few hundred labels, calibrate Jev; with a few thousand, consider building your own.
+Is this a fair fight? My model got up to 23,560 labels and Jev's calibration at most 2,000, so I also recalibrated Jev on exactly the same training emails my model learned from, all the way up to 23,560. It didn't help. Accuracy topped out at the same 0.86, and Jev's probabilities actually got further from the truth (KL around 0.17, against 0.06 before). The reason is instructive. The test emails were deliberately built from combinations of ingredients that never appear in the training emails, so the two sets have a different mix: 33% of the test emails are billing, for example, against 23% of the training emails. A recalibrator only learns "when Jev says X, the answer is usually Y" for the mix of emails it was fitted on. When Jev said "sales", it was right 64% of the time on the training emails but 92% of the time on the test emails, so a correction learned on one set is wrong for the other. My own model learned how the words relate to the labels instead, which carries over. So the smaller calibration set, drawn from the same kind of emails as the test, was actually the favorable setting for Jev. The practical lesson: calibrate Jev on data that looks like what you'll run it on, and recalibrate when that changes.
+
+These emails are short and templated, so a real business's messier text would need more labels than this. The pattern is worth noting: with a relatively smaller amount of labels (here a few hundred), calibrate Jev; with more (here a few thousand), consider building your own. Exact numbers likely vary by application.
 
 ## Conclusion
 
