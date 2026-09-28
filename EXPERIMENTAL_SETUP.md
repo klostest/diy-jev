@@ -447,22 +447,55 @@ distribution    distribution    scalar           distributions
    $q_{\text{urgency}}$, $q_{\text{is\_business}}$ and
    $q_{\text{hidden\_priority}}$, which don't come from any text. For
    question $c$, one standard attention step uses $q_c$ as the query and
-   the token vectors as keys and values:
+   the token vectors as keys and values. Written first as if there were a
+   single attention head:
 
    $$
    \alpha_t = \text{softmax}_t\!\left(\frac{(q_c W_Q)(h_t W_K)^{\top}}{\sqrt{d}}\right),
    \qquad
-   z_c = \Big(\sum_{t} \alpha_t \, h_t W_V\Big) W_O
+   z_c = \sum_{t} \alpha_t \, h_t W_V
    $$
 
    The question's vector scores every token for relevance, the scores
    become weights summing to 1, and $z_c$ is the resulting weighted blend of
-   tokens. It uses 4 attention heads of 96 dimensions each, with padding
-   tokens masked out. The projections $W_Q, W_K, W_V, W_O$ are shared by all
-   four questions; only the query vectors differ. So each question learns
-   to *look at different tokens*: after training, the urgency query should
-   weight tokens like "URGENT" and "!!!", and the category query the
-   complaint sentence. The one set of token vectors is read four ways.
+   tokens. Padding tokens are masked out.
+
+   **With 4 heads, and the output projection $W_O$.** The layer actually
+   runs 4 of these side by side. Head $h$ has its own slices
+   $W_Q^{(h)}, W_K^{(h)}, W_V^{(h)}$ of the projections, mapping the
+   384-dimensional vectors down to $d = 96$ dimensions, and computes its own
+   weights $\alpha^{(h)}_t$ and its own blend $z_c^{(h)}$ (96 numbers). The
+   four blends are then placed side by side and mixed by one more learned
+   matrix, the **output projection** $W_O$ (384 × 384):
+
+   $$
+   \alpha^{(h)}_t = \text{softmax}_t\!\left(\frac{(q_c W_Q^{(h)})(h_t W_K^{(h)})^{\top}}{\sqrt{96}}\right),
+   \qquad
+   z_c^{(h)} = \sum_{t} \alpha^{(h)}_t \, h_t W_V^{(h)},
+   \qquad
+   z_c = \big[\, z_c^{(1)};\, z_c^{(2)};\, z_c^{(3)};\, z_c^{(4)} \,\big]\, W_O
+   $$
+
+   Because each head has its own weights, the heads can attend to
+   *different* tokens in the same email. After concatenation each head's
+   findings sit in their own block of 96 numbers; $W_O$ lets every output
+   dimension draw on all four heads at once (for example, combining "found
+   an intensity phrase" with "found exclamation marks") and returns the
+   result to 384 dimensions. (With a single head, $W_O$ would be optional,
+   since the output layer after it could absorb it.) In PyTorch's
+   `nn.MultiheadAttention` it's called `out_proj`.
+
+   All the projections, $W_Q, W_K, W_V$ and $W_O$, are shared by the four
+   questions; only the query vectors differ. So each question learns to
+   *look at different tokens*, and the weights are recomputed for every
+   email, so it finds those tokens wherever they appear.
+   `scripts/show_attention.py` prints the weights for a few emails: one
+   urgency head puts nearly all its weight on the intensity phrase
+   ("priority", "urgent" or "rush", whichever the email has) and another
+   on the "!". The category heads spread over the complaint sentence, the
+   business heads go to the signature, and the `hidden_priority` heads
+   spread thin over boilerplate, since there's nothing there to find. The
+   one set of token vectors is read four ways.
 3. **Output heads.** Each $z_c$ goes through a small linear layer: a
    softmax over labels for `category` and `urgency`, a sigmoid for the
    yes/no `is_business`, and three views (yes/no, choice, score) for
@@ -780,10 +813,14 @@ For item $i$ (out of $N$ items in a set):
   Jev) reports for the same item.
 - $\hat y_i$ — the label the model picks (its highest-probability label, or
   Jev's `choice`).
-- $\hat p_i$ — the model's **confidence** in that pick. For the toy model
-  it's the highest probability it reports (for a yes/no head,
-  $\max(q, 1-q)$). For Jev it's Jev's own `confidence` field, falling back
-  to its highest probability if the field is missing.
+- $\hat p_i$ — the model's **confidence** in that pick: the highest
+  probability it reports (for a yes/no answer, $\max(q, 1-q)$), for the
+  toy model and Jev alike. Jev also returns a separate `confidence` field,
+  but it isn't a probability: it turns out to be the top probability
+  rescaled so that a uniform guess reads 0 (`RESULTS_AND_DISCUSSION.md`,
+  S5). So it can't be compared with an accuracy. The pre-registered S1 and
+  S3 computations in `probe/suites.py` did use that field; the results
+  report those numbers and the corrected ones side by side.
 - $y_i$ — the item's hard label, sampled from $p_{\text{true},i}$ (Part 1).
 - $o_i = \mathbb{1}[\hat y_i = y_i]$ — whether the pick matched the hard
   label: 1 if so, 0 if not.
@@ -1169,9 +1206,10 @@ need a positive control: deliberately hide a coherent region of data from
 training, then confirm a real uncertainty signal (MC-dropout spread) is
 *elevated* specifically there. That would give a template for what a
 `confidence` field doing its job should look like — a sharper basis for
-interpreting Jev's own `confidence` field, which suite S5 already found is
-empirically almost indistinguishable from `max(probability)` (correlation
-0.9996–0.9998) without being able to say *what it's failing to be*.
+interpreting Jev's own `confidence` field, which suite S5 found is a fixed
+rescaling of `max(probability)` (for `choice` answers, exactly
+(top − 1/K) / (1 − 1/K)), so it carries no information of its own about
+when to trust an answer.
 
 **What building it would take** (not done, estimated, two tiers):
 

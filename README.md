@@ -306,8 +306,9 @@ signed failure the narrow grid structurally couldn't reach.
 **S3 (unanswerable) — confirmed cleanly, again.** On `HIDDEN_PRIORITY`
 items (true posterior exactly the prior, zero evidence in the text by
 construction): accuracy **0.265**, *below* the 0.40 Bayes-optimal ceiling
-for guessing the prior; mean confidence **0.672**; overconfidence gap
-**+0.272**. Directly replicates the published 44.7%-accuracy/0.74-
+for guessing the prior; mean `confidence` field **0.672** (gap +0.272 as
+pre-registered), but that field isn't a probability (see S5 below): on the
+probability scale Jev's mean top probability is **0.754**, a gap of **+0.35**. Directly replicates the published 44.7%-accuracy/0.74-
 confidence finding — on an independently-built, provably-unanswerable item
 with a different exact prior. Twice now, on two different constructions,
 Jev is confident on a question it structurally cannot know the answer to.
@@ -323,8 +324,11 @@ three framings, three different answers around a known target.
 
 **S5 (confidence vs. probability), exploratory:** correlation 0.9998 between
 `confidence` and max(`probabilities`); AURC essentially identical (0.1339 vs
-0.1341). `confidence` appears to be a restatement of max-probability, not a
-distinct signal.
+0.1341). For `choice` answers `confidence` is exactly
+(top − 1/K) / (1 − 1/K), the top probability rescaled so a uniform guess
+reads 0 (16,283 recorded `choice` answers with 2–6 options, within about 0.02; see
+`scripts/check_confidence_formula.py`). So it's
+not a probability and carries no separate signal.
 
 **S6 (prior sensitivity), exploratory:** given an explicitly restated base
 rate in the question instructions, Jev shifted its answer in the

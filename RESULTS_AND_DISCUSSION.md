@@ -22,13 +22,16 @@ test in S1–S6):
    incorrectly, though it might be tied to a feature not working" got
    P(billing) ≥ 0.99 on all 50 such emails. Half of all S2 answers put 95%
    or more on a single label.
-3. **Jev's `confidence` field is just its highest probability restated**
-   (S5): correlation 0.9998.
+3. **Jev's `confidence` field is its top probability, rescaled** (S5). For
+   `choice` answers, confidence = (top − 1/K) / (1 − 1/K) with K options
+   (checked on 16,283 answers with 2–6 options), so a uniform guess reads 0. It adds no information, and it
+   isn't a probability: a confidence of 0.54 means a top probability of
+   0.655.
 4. **Jev gives no sign when a question can't be answered from the text**
    (S3). Asked a priority question whose answer, in this synthetic world,
    has nothing to do with the email, it answered from the email's urgency
-   wording with a median confidence of 0.68, and was right less often than
-   blind guessing (26.5% vs. 40%).
+   wording with a median top probability of 0.76, and was right less often
+   than blind guessing (26.5% vs. 40%).
 
 About the toy model (Part 2 of the setup):
 
@@ -147,15 +150,34 @@ rounding-aware: 1.45, 0.56, 0.65 and 0.02 nats.)
 
 - **0.714 — holds regardless of our world.** The email says in so many
   words that it might not be a billing problem. However a forecaster
-  weighs that hedge, 99–100% billing, every time, across three different
-  wordings, ignores it. This is the single clearest calibration failure
-  in the project.
+  weighs that hedge, 99–100% billing, every time, ignores it. It held for
+  all three wordings of the sentence, including "This looks like a billing
+  problem to me, but it could also be a glitch on your end" (13 emails, all
+  0.99–1.00). This is the single clearest calibration failure in the
+  project.
 - **0.533 — partly world-dependent.** The sentence is written to be
   balanced. Our tables tilt it slightly toward billing (0.533), and Jev
   tilts it toward technical (0.31 billing on average). Neither tilt is
-  obviously right. What stands out is the spread: across the 50 emails,
-  Jev's P(billing) ranged from 0.07 to 0.75 on sentences that mean the
-  same thing.
+  obviously right. The wide spread across the 50 emails (0.07 to 0.75) is
+  almost entirely *which wording* each email got. Jev was consistent within
+  each wording but read the three very differently:
+
+  | Wording | Emails | Jev's P(billing), mean (range) |
+  |---|---|---|
+  | "I'm having trouble with my account, not totally sure if it's a billing thing or a bug." | 20 | 0.13 (0.07–0.23) |
+  | "Something's wrong with my account -- might be a charge, might be a feature that broke." | 19 | 0.28 (0.17–0.40) |
+  | "There's an issue with my account I can't quite pin down -- possibly a payment problem, possibly something not working right." | 11 | 0.68 (0.58–0.75) |
+
+  To most readers all three say "could be billing, could be a bug," which
+  is why our tables give them one answer. Jev seems to weigh particular
+  words heavily ("bug" toward technical, "payment problem" toward billing).
+  Whether that's a flaw depends on whether the three sentences really are
+  equivalent, so treat it as an observation. A smaller part of the spread
+  may come from the email's unrelated urgency wording: emails that sounded
+  urgent got higher P(billing) (0.43–0.47, 16 emails) than ones that didn't
+  (0.22–0.26, 34 emails). In this world urgency has nothing to do with
+  category. The groups are small and weren't checked for balance across
+  the three wordings, so this is a lead, not a finding.
 - **0.345 — world-dependent.** The email says nothing about its topic.
   The right answer is then mostly the base rates, and ours are invented.
   Jev thinks a contentless email is most likely technical (0.62) or spam
@@ -165,6 +187,26 @@ rounding-aware: 1.45, 0.56, 0.65 and 0.02 nats.)
 
 Across all 200 S2 answers, 51% put 95% or more on a single label. Jev's
 probabilities pile up near 0 and 1 even when the text doesn't justify it.
+
+**What about Jev's `confidence` field?** S2 is graded on the full
+probability vector, because only a distribution can be compared with the
+exact four-label answer. The separate `confidence` number adds nothing,
+because it's computed from the top probability (see S5):
+
+| Exact P(billing) | Jev's mean `confidence` | Jev's mean top probability |
+|---|---|---|
+| 0.345 | 0.558 | 0.668 |
+| 0.533 | 0.690 | 0.770 |
+| 0.714 | 0.996 | 0.997 |
+| 1.0 | 1.000 | 1.000 |
+
+Each row follows confidence = (top − 0.25) / 0.75: for example,
+(0.668 − 0.25) / 0.75 = 0.557. The two agree near certainty and differ in
+the middle only because of that rescaling. `confidence` isn't a less
+overconfident second opinion, and it isn't a probability, so it shouldn't
+be compared with the exact answers. On the hedged 0.714 emails both say
+near-certainty. Whichever field a user reads, Jev claimed to be sure
+about emails that say they aren't.
 
 For the record: the first probe run could only test the 0.345 and 1.0
 levels, because the tables couldn't produce anything in between (setup,
@@ -179,7 +221,7 @@ this ticket be assigned?" In this world, priority is drawn by its own coin
 flip and never affects the text (setup, Part 1), so the exact answer for
 every email is the base rates: low 0.40, medium 0.30, high 0.20, critical
 0.10. The best possible strategy is to always guess *low*, which is right
-40% of the time, with confidence 0.40.
+40% of the time, with a top probability of 0.40.
 
 **One email, and what Jev said.**
 
@@ -202,9 +244,12 @@ correct.)
 
 **Against the pre-registered test.** Accuracy **0.265** (53/200; 95%
 interval 0.209–0.330, entirely below the 0.40 that blind guessing would
-get). Mean confidence **0.672**, so the overconfidence gap is **+0.27**.
-**The prediction is confirmed**: Jev is confident on a question it can't
-answer from the text.
+get). The test was written in terms of Jev's `confidence` field: mean
+0.672, an overconfidence gap of +0.27. But `confidence` isn't a
+probability (S5), so the like-for-like comparison with the 0.40 accuracy
+ceiling uses Jev's top probability: mean **0.754**, a gap of **+0.35**.
+Either way, **the prediction is confirmed**: Jev is confident on a question
+it can't answer from the text. The corrected numbers make it more so.
 
 **Why it did worse than guessing.** Grouping the emails by the urgency
 phrase they happen to contain (from the separate `urgency` concept):
@@ -226,17 +271,21 @@ says URGENT would also say *high*. Nothing in the question tells Jev that
 priority is unrelated to the wording, so treating the wording as evidence
 is a reasonable reading. The claim "Jev is overconfident on an unanswerable
 question" therefore depends on our world's rule. What holds more generally
-is the *size* of the confidence: a median of 0.68, and 0.98 or more on one
-answer in ten, from a single stock phrase. And Jev has no way, in its
+is the *size* of the confidence: a median top probability of 0.76, and
+0.98 or more on one answer in nine, from a single stock phrase. And Jev has no way, in its
 output, to say "the text doesn't determine this." The README cites an
 independent test that found something similar on a different
-unanswerable question (44.7% accuracy, 0.74 confidence).
+unanswerable question (44.7% accuracy, 0.74 confidence, as reported
+there; whether that "confidence" is the rescaled field isn't stated).
 
 ### S1 (exploratory): easy emails
 
 Emails whose exact answer is at least 97% one category. Accuracy **0.91**
-(95% interval 0.862–0.942), mean confidence **0.943**, ECE 0.061. **The
-prediction is confirmed** (both above 0.9).
+(95% interval 0.862–0.942), mean top probability **0.958**, ECE 0.066.
+**The prediction is confirmed** (both above 0.9). The pre-registered
+computation used Jev's `confidence` field (mean 0.943, ECE 0.061). That
+field isn't a probability (S5), but here the difference is small because
+most answers are near certainty, where the two agree.
 
 Every one of the 18 misses is the same thing: an email asking for a new
 feature ("Could you add a dark mode option?"). Our tables make these
@@ -297,6 +346,70 @@ probability is **0.9998**. Ranking emails by either gives the same AURC
 (0.1339 vs 0.1341). **The prediction is confirmed**, and this holds
 regardless of our world: `confidence` carries no information that the
 probabilities don't already contain.
+
+**It's a formula, not just a correlation.** For `choice` questions,
+
+> confidence = (top probability − 1/K) / (1 − 1/K), with K answer options
+
+With four options, a flat 25/25/25/25 answer gets confidence 0 and
+certainty gets 1. `scripts/check_confidence_formula.py` tests this on
+every `choice` answer Jev has returned in this project, plus 100 new
+emails asked 2-, 3-, 5- and 6-option versions of the category question
+(all four S1–S6 questions have 4 options, which can't test the 1/K part):
+
+| Options (K) | Answers | Largest error, the formula | Largest error, same formula with K fixed at 4 | Largest error, best alternative |
+|---|---|---|---|---|
+| 2 | 100 | 0.010 | 0.333 | 0.010 (top − second, which equals the formula when K = 2) |
+| 3 | 100 | 0.010 | 0.083 | 0.23 |
+| 4 | 15,883 | 0.023 | — | 0.24 |
+| 5 | 100 | 0.018 | 0.047 | 0.13 |
+| 6 | 100 | 0.016 | 0.080 | 0.14 |
+
+"Alternatives" means the plain top probability, the gap between the top
+two, and one minus normalized entropy. Across 16,283 answers the formula
+is never off by more than about 0.02. The K-fixed-at-4 version fails as
+soon as K changes, so the dependence on the number of options is real.
+
+The fit is close but not exact to the last digit. The same displayed
+probabilities occasionally come with confidences up to 0.04 apart (for
+example (0.61, 0.35, 0.03, 0.01) with confidences 0.46–0.50, around a
+formula value of 0.48), more than rounding alone explains. The most likely
+explanation is that confidence is computed from Jev's unrounded internal
+probabilities. Either way, that leftover carries **no** information about
+whether an answer is right. On the 6,440 head-to-head emails, adding it to
+the top probability doesn't improve prediction of correctness (10-fold
+cross-validated log loss changes by 0.00004 on category and 0 on
+priority). Among emails with the same displayed top probability, those
+whose confidence sits above the formula are no more often right than
+those below it (differences of −0.011 and +0.009).
+
+Consequences:
+
+- **`confidence` adds no information.** It's a fixed increasing function
+  of the top probability plus meaningless noise, so it ranks answers the
+  same way (the AURC difference above is noise) and can't flag an answer
+  the probabilities don't already flag. The hedged S2 emails got 0.99+ on
+  both.
+- **`confidence` is not a probability.** It measures how far the top answer
+  is above a random guess. A confidence of 0.54 on a four-option question
+  means a top probability of 0.655, not a 54% chance of being right. A user
+  who reads it as a probability will under-read what Jev is claiming,
+  especially in the middle of the range.
+- **It's not a pointless design, just an unexplained one.** Measuring
+  "distance from chance" puts questions with different numbers of options
+  on one scale: 0.5 means halfway from a random guess to certainty whether
+  there are 2 options or 6. The problems are the name, a scale that looks
+  like a probability, and documentation that doesn't say it's derived
+  from the top probability.
+
+Limits: this covers `choice` questions only. `score` questions report a
+`confidence` too, but none of these formulas fits it, so what it measures
+there is undetermined. Yes/no (`noul`) answers have no confidence field.
+All of this is inferred from Jev's outputs, not from its code. It's a
+precise description of what Jev returns, not a statement about how it's
+implemented. `outputs/figures/s5_confidence.png` plots confidence against
+the top probability with the formula drawn through the points; the check's
+numbers are in `outputs/confidence_check/results.json`.
 
 ### S6 (exploratory): does Jev use a stated base rate?
 
@@ -574,7 +687,7 @@ usually are.
 
 ### The priority question (unanswerable from the text)
 
-| Approach | Labeled emails used | Accuracy | Posterior KL (nats) | Mean confidence |
+| Approach | Labeled emails used | Accuracy | Posterior KL (nats) | Mean top probability |
 |---|---|---|---|---|
 | *Exact posterior: the base rates (ceiling)* | — | *0.402* | *0* | *0.400* |
 | Jev, as is | 0 | 0.281 | 1.29 | 0.721 |
@@ -588,12 +701,12 @@ usually are.
 (AURC is left out: every email has the same true answer, so there's no
 correct ranking to measure.)
 
-Raw Jev is confident (0.72) and worse than guessing (0.281 vs. 0.402), as in
+Raw Jev is confident (mean top probability 0.72) and worse than guessing (0.281 vs. 0.402), as in
 S3. With 1,000 labels, isotonic or logistic regression learns that Jev's
 answer carries no information here and reports the base rates. That's
 exactly right, and it gets there with fewer labels than training from
 scratch needs. Temperature scaling can only flatten Jev's answers toward
-uniform: it stops the overconfidence (mean confidence 0.28) but can't learn
+uniform: it stops the overconfidence (mean top probability 0.28) but can't learn
 that *low* is more common than *critical*.
 
 ### What this does and doesn't show
@@ -633,8 +746,9 @@ Ranked by how much weight each can bear:
 2. Jev reports near-certainty on text that explicitly hedges: P(billing)
    ≥ 0.99 on 50 of 50 emails that say "it might be tied to a feature not
    working" (S2). More broadly, its answers pile up near 0 and 1.
-3. Jev's `confidence` field adds nothing beyond its highest probability
-   (S5).
+3. Jev's `confidence` field is its top probability rescaled by a fixed
+   formula (S5). It adds nothing, and it isn't a probability, so reading
+   it as "chance of being right" under-reads Jev's claims.
 4. Accuracy-only evaluations can't show whether probabilities are
    calibrated (toy model).
 
