@@ -1,4 +1,6 @@
-In recent weeks, AI safety has increasingly entered the public conversation, as frontier labs disclose hacking incidents, and the existential threats posed by AI are being considered by many who may never have taken them seriously. Internet searches for "AI safety" have skyrocketed. The frontier labs have publicly supported a slowing down of AI development, while the observed pace of model releases accelerates.
+# Introduction
+
+In recent weeks, AI safety has increasingly entered the public conversation, as frontier labs disclose unintentional hacking incidents, and the existential threats posed by AI are being considered by many who may never have taken them seriously. Internet searches for "AI safety" have skyrocketed. The frontier labs have publicly supported a slowing down of AI development, while the observed pace of model releases accelerates.
 
 Jev arrives at this moment and likely elicits a certain level of comfort. It is powerful like the frontier chatbots in that it can understand natural language from the user, but the responses are numbers in user-defined formats, as opposed to free text. You can try and tame an LLM system with evals, but Jev is tame by construction. It's simpler. It's controllable. You tell it how to behave and you can't imagine it taking over the world.
 
@@ -6,9 +8,9 @@ Instead, Jev supplies answers to yes/no questions with a predicted probability (
 
 Jev was reportedly trained entirely on synthetic data that TypeSafe AI created ([TechCrunch](https://techcrunch.com/2026/09/18/a-new-kind-of-ai-model-from-a-chatgpt-inventor-is-thrilling-developers/)), and TypeSafe hasn't published its architecture or weights. This made me wonder how Jev could possibly hope to supply a calibrated probability to a user's question, as TypeSafe AI, Jev's developers, [claim](https://typesafe.ai/). I explore the calibration of Jev's probabilities, the confidence score, and Jev's consistency here. I also train from scratch a system with similar functionality to Jev, but only for a defined set of tasks where labeled training data exists, and compare the results to Jev's outputs.
 
-# Part 0: The Data: Emails, constructed so that class probabilities are precisely known.
+# The Data: Emails, constructed so that class probabilities are precisely known.
 
-This project rests on a foundation of synthetic email messages, that a hypothetical support team at a business might receive. The emails were created in a way that certain labels are precisely known for each one: whether it fits in the billing, technical, sales, or spam category, for example. The email texts were generated with phrases, tone of voice, and sender domains, for example, that mapped to these labels. In some cases, label overlap was injected to make it impossible to perfectly recover all labels from the training set: there is a known Bayes optimal ceiling to the performance of any machine learning model in learning to predict this data, which we know because we controlled the data generating process.
+This project rests on a foundation of synthetic email messages, that a hypothetical support team at a business might receive. The emails were created in a way that certain labels are precisely known for each one: whether it fits in the billing, technical, sales, or spam category, for example. The email texts were generated with elements like phrases, tone of voice, and sender domains that mapped to these labels. In some cases, label overlap was injected to make it impossible to perfectly recover all labels from the training set: there is a known Bayes optimal ceiling to the performance of any machine learning model in learning to predict this data, which we know because we controlled the data generating process.
 
 Here is one of the generated emails:
 
@@ -35,17 +37,17 @@ Each piece of this email was drawn from a small table of options. The column hea
 | `urgency` | `intensity_marker` | `extreme` | "URGENT -- please treat as a priority." |
 | `is_business` | `signature_style` | `first_name_only` | "Thanks, Emma" (on two lines) |
 
-There's no need to follow every detail here; the point is to get a rough impression of how the emails map onto labels. The [repo](REPO_URL) has the full tables and a step-by-step walkthrough.
+Hopefully this gives you a rough impression of how the emails map onto labels. The [repo](REPO_URL) has the full tables and a step-by-step walkthrough.
 
 Because we know exactly which ingredients went into this email, and how likely each ingredient is under each category, we can calculate its category probabilities exactly: 65% billing, 17% technical, 7% sales and 11% spam. Nobody labeled this email; the answer falls out of the arithmetic.
 
-Most emails are much more clear-cut than this one. In the 6,440 test emails used later on, 73% have one category at 97% probability or more; I'll call these *recoverable*. The rest are *ambiguous* to varying degrees: 8% have a leading category somewhere between 50% and 97%, and 19% have no category above 50%. Those last ones are all emails with no complaint sentence at all, where only weak clues like the sender's email domain remain. Because of the ambiguous emails, even a perfect model, one that knew every probability exactly, would only pick the right category about 87% of the time on this test set.
+Most emails are much more clear-cut than this one. In the 6,440 test emails used later on, 73% have one category at 97% probability or more; I'll call these *recoverable*. The rest are *ambiguous* to varying degrees: 8% have a leading category somewhere between 50% and 97%, and 19% have no category above 50%. Those last ones are all emails that don't include a complaint sentence, where only weak clues like the sender's email domain remain. Because of the ambiguous emails, even a perfect model, one that knew every probability exactly, would only pick the right category about 87% of the time on this test set.
 
-This creates a dataset that we understand the statistical properties of. Jev has never seen this dataset before, so it's not expected that Jev would recover these properties. But they give us some material to start some open exploration of Jev with. Later in part 2 we'll use the labels to train a model, and compare it to Jev's outputs, calibrated to those same labels.
+This creates a labeled dataset with well-understand properties. We know the probability distribution of labels for each sample. Jev has never seen this dataset before, so it's not expected that Jev would recover these properties. But the email texts were created so that emails that are ambiguous should read semantically as ambiguous, so they give us some material to explore Jev with. Later in part 2 we'll use the labels to train a model, and compare it to Jev's outputs, calibrated to those same labels.
 
-# Part 1 some probes of Jev
+# Probing interactions with Jev
 
-## S1: Obvious answers
+## Obvious answers
 
 This probe asks some questions to Jev that are recoverable from the labeled training data. While Jev has not seen these labels, recoverable emails were designed with obvious wording, so a capable natural language system may easily be able to classify them, with some descriptive labels.
 
@@ -85,7 +87,8 @@ The response includes a probability for each class, and an overall confidence sc
 }
 ```
 
-For 200 recoverable emails, Jev correctly classified all but 18. These 18 were entirely in the sales class and involved feature requests. My theory as to what happened here is that Jev has built-in context associating feature requests with building software, as opposed to inbound support messages a team might receive alongside other customer-facing questions like billing questions. This counter-acted the presence of the word "feature" in the description of the sales category, shown in Jev's inputs above. There were actually 26 emails in the sales category mentioning feature requests and Jev correctly classified 8 of them, indicating the question choice description was partially successful. There are likely many ways to rephrase the inputs to Jev to "fix" this.
+For 200 recoverable emails, Jev correctly classified all but 18. These 18 were entirely in the sales class and involved feature requests. My theory as to what happened here is that Jev has built-in context associating feature requests with building software, as opposed to inbound support messages a team might receive alongside other customer questions like billing questions. This counter-acted the presence of the word "feature" in the description of the sales category, shown in Jev's inputs above. There were actually 26 emails in the sales category mentioning feature requests and Jev correctly classified 8 of them, indicating the question choice description was partially successful. There are likely many ways to rephrase the inputs to Jev to address issues like this.
+
 
 Jev's reported confidence in the 26 feature request emails is notable - they received confidence scores spread across 0.36-0.75, with a median of 0.6, while every other email got at least 0.92 (and all but one got 0.95 or more). So on the obvious questions, when Jev was struggling, it represented that through lower confidence.
 
@@ -93,7 +96,7 @@ Jev's reported confidence in the 26 feature request emails is notable - they rec
 
 *Jev's confidence on the 200 obvious emails. Every feature request got a middling confidence, whether Jev's answer counted as right or wrong; every other email got a near-certain, correct answer. Note the two panels' different vertical scales.*
 
-## S2: Calibrated to the unknown?
+## Calibrated to the unknown?
 
 When I first heard that Jev was trained on synthetic data and produced calibrated probabilities to new questions, it sounded like an oxymoron. TypeSafe does use the standard statistical definition of calibration: outcomes given a probability of 0.2 should happen about 20% of the time ([docs](https://docs.typesafe.ai/introduction/machine-learning-primer)). But the pitch for Jev puts it more loosely: "Calibrated: higher confidence means higher accuracy" ([launch post](https://typesafe.ai/blog/introducing-system-one-models-and-jev)). That looser version is satisfied as long as less certain answers get lower confidence, which is what we saw with the obvious questions above. It doesn't say whether the probabilities are right in absolute terms. Nonetheless, I was curious to see "how well calibrated" Jev's probabilities are, given this synthetic dataset where we know them, and have attempted to create the associated texts in ways that make them recoverable semantically to various degrees.
 
@@ -105,7 +108,7 @@ For this probe I picked four combinations of ingredients whose true probability 
 
 Jev correctly ranks the probabilities into four levels (in fact, for individual emails the four levels don't overlap at all), although the separation between the top two levels is minute. Jev appears to tend toward extremes, in this multiple choice question. The second column from the right is the telling one: those emails say outright that the problem might not be about billing ("I think I'm being charged incorrectly, though it might be tied to a feature not working as expected"), and the true answer is 71% billing, yet Jev said 99-100% billing on all 50 of them. The middle probabilities that do appear, around 0.53, depended heavily on wording: three phrasings of the same balanced sentence ("might be a charge, might be a feature that broke") got average billing probabilities of 0.13, 0.28 and 0.68.
 
-## S5: The confidence number
+## The confidence number
 
 TypeSafe's documentation describes the confidence score as "a statistic computed from the probability distribution the answer already gives you" ([docs](https://docs.typesafe.ai/confidence)), and shows an approximate version for three options. While going through the results, Claude, the AI assistant I worked with on this project, noticed that Jev's confidence could be recovered exactly from its largest probability. We checked this on more than 16,000 of Jev's multiple-choice answers, for questions with anywhere from two to six options, and it held every time, to within rounding:
 
@@ -115,7 +118,7 @@ This is just the largest probability rescaled to run from 0 to 1. On a four-opti
 
 That includes the feature-request emails in the first figure. Their confidence was lower simply because Jev split its probability between technical and sales, and the confidence score restates that. It's a handy summary of how spread out Jev's answer is, but it isn't an independent check on whether the answer is right. (Ordinal "score" questions also return a confidence, which follows some other rule we couldn't identify.)
 
-## S4: Internal consistency
+## Internal consistency
 
 Jev allows three different question formats; do they agree when asked what is essentially the same question?
 
@@ -139,12 +142,12 @@ This is actually a more complicated question to consider asking Jev than it may 
 
 We've now probed Jev against some very well-understood data, synthetic but generated to be semantically believable, that Jev had never seen, and found that Jev generally behaves intuitively. While we actually know the true recoverable class probabilities for the classification problems we are posing to Jev because we designed and controlled the data generating process, in the real world a practicing data scientist would more likely only have access to one label per sample: the observed outcome, whatever the underlying class probabilities are. We leverage this kind of information in the next section.
 
-# Part 2
+# Calibrating Jev versus DIY Jev
 
 Of course Jev's probabilities are not calibrated to unseen data, in the absolute accuracy sense of calibration. But what if you calibrate them? This assumes you have some data with known labels, which also raises the question, why not try to create your own version of a system like Jev from scratch? Here I compare these approaches.
 
 
-## Concise model architecture
+## Model architecture
 
 Like Jev, the model reads an email once and answers several fixed questions about it in parallel: here, its category, its urgency, and whether it was sent in a business capacity. Here's what happens to the example email from the beginning of this post:
 
@@ -195,33 +198,33 @@ Here:
 
 A small output layer turns each question's summary into probabilities. Because every question has its own query, each learns to look at different words: after training, the urgency question's attention landed squarely on phrases like "URGENT" and on exclamation marks, the category question's on the complaint sentence, and the business question's on the sign-off. The encoder and everything after it are trained together.
 
-I trained the model on hard labels only: one observed category per email, the way a business would have historical outcomes, not the exact probabilities we happen to know here. To see how much labeled data it takes, I trained it on 50, 200, 1,000, 5,000 and all 23,560 labeled training emails, three times each with different random subsets. Each run held back 20% of its labeled emails to decide when to stop training. The test emails were built from combinations of ingredients that never appeared in training. Each run took at most about five minutes on an M1 Max Mac; no GPU cluster required.
+I trained the model on hard labels only: one observed category per email, the way a business would have historical outcomes, not the exact probabilities we happen to know here. To create learning curves, I trained it on 50, 200, 1,000, 5,000 and all 23,560 labeled training emails, three times each with different random subsets. Each run held back 20% of its labeled emails to decide when to stop training. The test emails were built from combinations of ingredients that never appeared in training. Each run took at most about five minutes on an M1 Max Mac; no GPU cluster required.
 
-## Results from this
+## Results
 
-To calibrate Jev, I set aside 2,000 of the 6,440 test emails as the labeled data a business might have, and scored every approach on the remaining 4,440. As with my own model, the calibration used hard labels only. I tried three standard recalibration methods, each fitted on 50 to 2,000 of those labels. *Temperature scaling* softens or sharpens all of Jev's answers by the same amount. It can't change which category Jev picks, so it can't improve accuracy. *Isotonic regression* learns, separately for each category, how often Jev's stated probability actually came true. *Logistic regression* treats Jev's four probabilities as inputs to a small model of its own. The last two can change Jev's answer, and that turned out to matter.
+To calibrate Jev, I set aside 2,000 of the 6,440 test emails as the labeled data a business might have, and scored every approach on the remaining 4,440. As with my own model, the calibration used hard labels only. I tried three standard recalibration methods, each fitted on 50 to 2,000 of those labels. *Temperature scaling* softens or sharpens all of Jev's answers by the same amount. It can't change which category Jev picks, so it can't improve accuracy. *Isotonic regression* learns, separately for each category, how often Jev's stated probability actually came true. *Logistic regression* (not shown) treats Jev's four probabilities as inputs to a small model of its own. The last two can change Jev's answer, and that turned out to matter.
 
-| Approach | Labeled emails used | Accuracy | Distance from the true probabilities (KL, lower is better) |
-|---|---|---|---|
+| Approach                                     | Labeled emails used | Accuracy | Distance from the true probabilities (KL, lower is better) |
+|----------------------------------------------|---|---|---|
 | Best possible (knows the true probabilities) | - | 0.868 | 0 |
-| Jev as is | 0 | 0.788 | 0.31 |
-| Jev + temperature scaling | 1,000 | 0.788 | 0.25 |
-| Jev + isotonic regression | 200 | 0.852 | 0.088 |
-| Jev + isotonic regression | 1,000 | 0.860 | 0.063 |
-| My own model | 200 | 0.742 | 0.41 |
-| My own model | 1,000 | 0.858 | 0.072 |
-| My own model | 5,000 | 0.867 | 0.021 |
-| My own model | 23,560 | 0.870 | 0.005 |
+| Jev as is                                    | 0 | 0.788 | 0.31 |
+| Jev + temperature scaling                    | 1,000 | 0.788 | 0.25 |
+| Jev + isotonic regression                    | 200 | 0.852 | 0.088 |
+| Jev + isotonic regression                    | 1,000 | 0.860 | 0.063 |
+| DIY Jev                                      | 200 | 0.742 | 0.41 |
+| DIY Jev                                     | 1,000 | 0.858 | 0.072 |
+| DIY Jev                                 | 5,000 | 0.867 | 0.021 |
+| DIY Jev                                 | 23,560 | 0.870 | 0.005 |
 
 With a few hundred labels, calibrated Jev comes close to the best possible accuracy: 0.86 against 0.868. It gets less close on calibration itself, though. Its probabilities stay noticeably further from the true ones than a well-trained model's. Interestingly, most of what calibration fixed wasn't Jev misreading emails. It was Jev disagreeing with this dataset's conventions: emails with no complaint sentence at all, which this dataset tends to call spam or sales and Jev called technical, and the feature requests from earlier. A few hundred labels are enough to teach those conventions.
 
 Training my own model from scratch lost to Jev at 200 labels, tied calibrated Jev at about 1,000, and from 5,000 labels on beat every version of Jev on accuracy and calibration, getting close to the best possible model. (With all the training data it edges slightly past the "best possible" accuracy; that's the luck of which labels happened to be drawn for this test set.) It also ranked its answers better: its confident answers were more reliably right than Jev's, even after calibration.
 
-Is this a fair fight? My model got up to 23,560 labels and Jev's calibration at most 2,000, so I also recalibrated Jev on exactly the same training emails my model learned from, all the way up to 23,560. It didn't help. Accuracy topped out at the same 0.86, and Jev's probabilities actually got further from the truth (KL around 0.17, against 0.06 before). The reason is instructive. The test emails were deliberately built from combinations of ingredients that never appear in the training emails, so the two sets have a different mix: 33% of the test emails are billing, for example, against 23% of the training emails. A recalibrator only learns "when Jev says X, the answer is usually Y" for the mix of emails it was fitted on. When Jev said "sales", it was right 64% of the time on the training emails but 92% of the time on the test emails, so a correction learned on one set is wrong for the other. My own model learned how the words relate to the labels instead, which carries over. So the smaller calibration set, drawn from the same kind of emails as the test, was actually the favorable setting for Jev. The practical lesson: calibrate Jev on data that looks like what you'll run it on, and recalibrate when that changes.
+Is this a fair fight? My model got up to 23,560 labels and Jev's calibration at most 2,000, so I also recalibrated Jev on exactly the same training emails my model learned from, all the way up to 23,560. It didn't help. Accuracy topped out at the same 0.86, and Jev's probabilities actually got further from the truth (KL around 0.17, against 0.06 before). This is because the test set differs from the training set as described above; to make sure the DIY model couldn't just memorize answers, the test emails were built from combinations of ingredients that never appeared in training. So the smaller calibration set, drawn from the same kind of emails as the test, was actually the favorable setting for Jev. A practical lesson to take away is to calibrate Jev on data that looks like what you'll run it on, and recalibrate when that changes.
 
 These emails are short and templated, so a real business's messier text would need more labels than this. The pattern is worth noting: with a relatively smaller amount of labels (here a few hundred), calibrate Jev; with more (here a few thousand), consider building your own. Exact numbers likely vary by application.
 
-## Conclusion
+# Conclusion
 
 Jev has never trained on your data, although it may have indirectly trained on things you've seen, like Wikipedia or whatever the encoder it presumably uses was trained on. Jev aims to be a generalist in terms of inputs, but a specialist in terms of outputs. Jev can be impressive in the face of questions it has never seen labels for, but can also struggle to output consistent answers for different ways of asking the same question. While the confidence number supplied from Jev does drop when Jev is uncertain, it is computed directly from the largest probability, as TypeSafe's documentation says, so it adds nothing beyond the probabilities themselves, at least for choice-type questions.
 

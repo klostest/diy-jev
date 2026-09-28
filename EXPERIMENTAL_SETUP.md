@@ -1118,6 +1118,70 @@ between technical and sales, the answer is usually sales," and it can
 re-weight the base rates entirely. It's still limited to what Jev's four
 numbers contain; it never sees the email.
 
+### A primer: does calibration change the ranking? And why these methods behaved as they did
+
+A common intuition is that calibration fixes the *numbers* but never the
+*ranking*. That's exactly true for a yes/no question corrected by any
+increasing function: if one email's probability was higher than another's
+before, it still is afterwards, so nothing is reordered. With several
+options it's more subtle, because "ranking" means two different things:
+
+1. **Which option comes out on top for a single email** (this decides
+   accuracy).
+2. **Which emails look more confident than others** (this decides AURC,
+   i.e. whether the confident answers are the right ones).
+
+The three methods differ in which of these they're allowed to change.
+
+**Temperature scaling changes neither.** One number, $T$, is applied to
+every option of every email: $T > 1$ softens all answers toward uniform,
+$T < 1$ sharpens them. Dividing every log-probability by the same $T$
+never changes which option is largest, and it moves every email's top
+probability in the same direction, so both rankings survive. It can only
+fix *overall* over- or under-confidence. Jev's problems aren't mostly of
+that kind: its errors come from specific label mix-ups (feature requests
+called technical, content-free emails called technical). So temperature
+scaling improved KL somewhat on the test-side pool (0.31 → 0.25, from
+softening Jev's overconfident answers) but left accuracy and AURC
+unchanged. On the training emails it did worse than no correction at all
+(KL 0.33). The fitted temperature there was 2.43, against 1.52 on the
+test-side pool, because Jev is much less accurate on the training emails
+(63%) than on the test emails (79%). A temperature tuned to soften a less
+reliable Jev over-softens the more reliable one.
+
+**Per-label isotonic regression can change both.** For each option
+separately, it learns an increasing curve from "the probability Jev gave
+this option" to "how often this option was actually right." For any one
+option, it keeps emails in the same order. But each option gets its own
+curve, and the four corrected numbers are then rescaled to add up to 1, so
+the top option can change. If "technical at 0.66" historically turned out
+to be technical only 40% of the time, while "sales at 0.34" was right more
+often, the correction can hand the email to sales. It did change the top
+option on 17% of the evaluation emails, which is how it lifted accuracy
+from 0.79 to 0.86 and improved AURC (0.046 → 0.021). It stops improving
+after about 1,000 labels because it only ever sees Jev's four numbers,
+never the email: once it has learned how much to trust each kind of Jev
+answer, more labels add little.
+
+**Logistic regression on Jev's log-probabilities is the most flexible.**
+It can re-weight options against each other and shift base rates, so it
+also changes both rankings. In practice it did slightly worse than isotonic
+here (accuracy about 0.85), presumably because a single smooth formula fits
+Jev's lumpy, label-specific errors less closely than four free-form
+curves.
+
+**Why all three depend on the data they're fitted on.** Each learns "when
+Jev says X, the answer is usually Y," and that relationship depends on the
+mix of emails. The training and evaluation emails have different mixes,
+because of the compositional split (Part 2): 23% vs. 33% billing, for
+example. What Jev's answers mean differs between them too: when Jev says
+"sales" it's right 64% of the time on training emails and 92% on
+evaluation emails. So corrections fitted on the training emails transfer
+poorly. A model trained on the text (the own model) learns how words
+relate to labels instead, which carries over to new combinations. The
+practical rule: recalibrate on data that looks like the data you'll run
+the model on.
+
 ### Toy-experiment summaries
 
 Each toy-model number is computed once per training seed, then reported as
