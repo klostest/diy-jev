@@ -61,7 +61,7 @@ def _wording_index(text: str) -> int | None:
     return None
 
 
-def draw(records, by_wording: bool, path: Path, blog: bool = False):
+def draw(records, by_wording: bool, path: Path, blog: bool = False, header: bool = True):
     """blog=True: no title/subtitle and no in-plot phrase notes (the post captions it)."""
     levels = sorted({round(r["achieved_p"], 3) for r in records})
     by_level = {lv: [r for r in records if round(r["achieved_p"], 3) == lv] for lv in levels}
@@ -153,15 +153,16 @@ def draw(records, by_wording: bool, path: Path, blog: bool = False):
     if blog:
         fig.set_size_inches(7.2, 5.0)
         fig.subplots_adjust(top=0.97, left=0.10, right=0.98, bottom=0.11)
-    else:
+    elif header:
         fig.suptitle(title, x=0.02, ha="left", fontsize=11.5, color=TEXT_PRIMARY, y=0.985)
         fig.text(0.02, 0.935, subtitle, fontsize=8.5, color=TEXT_SECONDARY, ha="left", va="top",
                  linespacing=1.4)
     if blog:
         pass
     elif by_wording:
-        fig.set_size_inches(7.2, 6.6)
-        fig.subplots_adjust(top=0.86, left=0.10, right=0.98, bottom=0.24)
+        fig.set_size_inches(7.2, 6.6 if header else 5.9)
+        fig.subplots_adjust(top=0.86 if header else 0.97, left=0.10, right=0.98,
+                            bottom=0.24 if header else 0.27)
     else:
         fig.subplots_adjust(top=0.88, left=0.10, right=0.98, bottom=0.10)
 
@@ -181,6 +182,8 @@ def main():
     draw(records, by_wording=False, path=OUT_DIR / "s2_calibration.png")
     draw(records, by_wording=True, path=OUT_DIR / "s2_calibration_by_wording.png")
     draw(records, by_wording=False, path=OUT_DIR / "s2_calibration_blog.png", blog=True)
+    # Blog version of the by-wording figure: same content, no title/subtitle (the post captions it).
+    draw(records, by_wording=True, path=OUT_DIR / "s2_calibration_by_wording_blog.png", header=False)
 
 
 if __name__ == "__main__":

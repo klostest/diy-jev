@@ -102,9 +102,9 @@ When I first heard that Jev was trained on synthetic data and produced calibrate
 
 For this probe I picked four combinations of ingredients whose true probability of billing is 0.345, 0.533, 0.714 and 1.0, and generated 50 emails for each, varying the wording, names and other details.
 
-![Jev's reported probability of billing against the true probability, 50 emails at each of four levels](outputs/figures/s2_calibration_blog.png)
+![Jev's reported probability of billing against the true probability, 50 emails at each of four levels](outputs/figures/s2_calibration_by_wording_blog.png)
 
-*Each dot is one email. A perfectly calibrated model would put every dot on the dashed diagonal; the diamonds mark the true answers and the black bars Jev's averages.*
+*Each dot is one email. A perfectly calibrated model would put every dot on the dashed diagonal; the diamonds mark the true answers and the black bars Jev's averages. At the 0.533 level, the dots are colored by which of three wordings of the same balanced sentence the email used (listed below the plot).*
 
 Jev correctly ranks the probabilities into four levels (in fact, for individual emails the four levels don't overlap at all), although the separation between the top two levels is minute. Jev appears to tend toward extremes, in this multiple choice question. The second column from the right is the telling one: those emails say outright that the problem might not be about billing ("I think I'm being charged incorrectly, though it might be tied to a feature not working as expected"), and the true answer is 71% billing, yet Jev said 99-100% billing on all 50 of them. The middle probabilities that do appear, around 0.53, depended heavily on wording: three phrasings of the same balanced sentence ("might be a charge, might be a feature that broke") got average billing probabilities of 0.13, 0.28 and 0.68.
 
